@@ -1,7 +1,8 @@
-{-# LANGUAGE ScopedTypeVariables, ForeignFunctionInterface #-}
+{-# LANGUAGE ScopedTypeVariables, OverloadedStrings, RecordWildCards #-}
 {-# OPTIONS_GHC -funbox-strict-fields #-}
-import qualified Data.Vector.Storable as V
-import qualified Data.Vector.Storable.Mutable as M
+module Engine where
+import qualified Data.Vector.Storable as VS
+import qualified Data.Vector as V
 import Graphics.Rendering.OpenGL.Raw
 import Control.Applicative
 import Control.Monad
@@ -9,49 +10,131 @@ import Data.IORef
 import Foreign.C
 import Foreign
 import qualified Data.ByteString as B
+import Util
+import Types
 
-data Env = Env
-    { thisModel :: !(IORef GLint)
+import Linear
+
+data Scene = Scene
+    { models         :: !(IORef (V.Vector Model))
     }
+
+newScene :: IO Scene
+newScene = Scene <$> newIORef V.empty
+
+drawScene :: Scene -> IO ()
+drawScene s = do
+    glClearColor 0 0 0 0
+    glClear gl_COLOR_BUFFER_BIT
+    glLoadIdentity
+    readIORef (models s) >>= V.mapM_ drawModel
+
+addModelToScene :: Scene -> Model -> IO ()
+addModelToScene s m = modifyIORef' (models s) (V.cons m)
+
+addModelsToScene :: Scene ->  V.Vector Model -> IO ()
+addModelsToScene s m = modifyIORef' (models s) (V.++ m)
+ 
+--------------------------------------------------------------------------------
+--  Vectors
+
+-- DEPRECATED
+-- using hmatrix now, everything is roses
+
+--------------------------------------------------------------------------------
+--  Uniforms
+
+type Uniform = GLint
+
+newUniform :: CString -> Program -> IO Uniform
+newUniform name prog = fromIntegral
+    `fmap` glGetUniformLocation prog name
 
 --------------------------------------------------------------------------------
 --  Models
 
-data Buffer = Buffer !GLenum !GLuint
-
 data Model = Model
-    { vertices    :: !GLuint
-    , elements    :: !GLuint
-    , normals     :: !GLuint
-    , uvs         :: !GLuint
-    , position    :: !(IORef (GLfloat, GLfloat, GLfloat))
+    { offsetR        :: !(IORef Vec)
+    , rotationR      :: !(IORef Rot)
+    , scaleR         :: !(IORef Vec)
+
+    , offset         :: !Uniform
+    , rotation       :: !Uniform
+    , scale          :: !Uniform
+
+    , vertices       :: !GLuint
+    , normals        :: !GLuint
+    , uvs            :: !GLuint
+
+    , size           :: !GLsizei
+    , linkedProgram  :: !Program
     }
 
-buffer' :: Storable a => V.Vector a -> IO GLuint
-buffer' = buffer gl_ARRAY_BUFFER gl_STATIC_DRAW
+vertexAttribute :: GLuint
+vertexAttribute = 0
 
-model :: V.Vector GLfloat -> V.Vector GLfloat -> V.Vector GLfloat -> V.Vector GLfloat -> V.Vector GLuint -> IO Model
-model vert elem norm uv tex
-    = Model
-        <$> buffer' vert
-        <*> buffer' elem
-        <*> buffer' norm
-        <*> buffer' uv
-        <*> newIORef (0,0,0)
+tri :: GLSL -> GLSL -> IO Model
+tri = newModel 
+    (VS.fromList 
+        [ 0.75 , 0.75 , 0.0
+        , 0.75 , -0.75, 0.0
+        , -0.75, -0.75, 0.0 ])
+    VS.empty 
+    VS.empty 
+    VS.empty
 
-renderModel :: Model -> Env -> IO ()
-renderModel m e = do
-    modifyIORef' (modelsInScene m) (+1)
-    mods <- readIORef (modelsInScene e)
+newModel :: Vertices -> Normals -> UVs -> GLSL -> GLSL -> IO Model
+newModel vert norm uv vshad fshad = do
+    offsetR       <- newIORef (V3 0 0 0)                 -- offset
+    rotationR     <- newIORef (Quaternion 0 (V3 0 0 0))  -- rotation
+    scaleR        <- newIORef (V3 1 1 1)                 -- scale
+    linkedProgram <- makeProgram vshad fshad
+    offset        <- newUniform "offset" linkedProgram
+    rotation      <- newUniform "rotation" linkedProgram
+    scale         <- newUniform "scale" linkedProgram
+    vertices      <- staticArray vert
+    normals       <- staticArray norm
+    uvs           <- staticArray uv
+    let size = fromIntegral (sizeOf (0::GLfloat) * VS.length vert)
+    return Model{..}
+
+swapModelVecs :: Model -> IORef Vec -> IORef Rot -> IORef Vec -> Model
+swapModelVecs m off rot scl = m{ offsetR = off, rotationR = rot, scaleR = scl }
+
+uniformFromVec :: GLint -> Vec -> IO ()
+uniformFromVec un (V3 x y z) = glUniform3f un x y z
+
+uniformFromQuat :: GLint -> Rot -> IO ()
+uniformFromQuat un (Quaternion w (V3 x y z)) = glUniform4f un x y z w
+
+drawModel :: Model -> IO ()
+drawModel m = do
+    -- Read offset/rotation/scale data from model
+    offsetv <- readIORef (offsetR m)
+    rotatev <- readIORef (rotationR m)
+    scalev  <- readIORef (scaleR m)
+
+    glUseProgram (linkedProgram m)
+
+    -- Upload uniforms to the shader
+    uniformFromVec  (offset m)   offsetv
+    uniformFromQuat (rotation m) rotatev
+    uniformFromVec  (scale m)    scalev
+    
+    -- Vertice attribute buffer
+    glEnableVertexAttribArray vertexAttribute
     glBindBuffer gl_ARRAY_BUFFER (vertices m)
-    glVertexAttribPointer
-        mods
-        3
-        gl_FLOAT
-        (fromIntegral gl_FALSE)
-        0
-        nullPtr
-    glBindBuffer gl_ELEMENT_ARRAY_BUFFER (elements m)
+    glVertexAttribPointer vertexAttribute 3 gl_FLOAT (fromIntegral gl_FALSE) 0 nullPtr
+    glDrawArrays gl_TRIANGLES 0 (size m `div` 12)
+
+    -- UV attribute buffer
+    glEnableVertexAttribArray 
+
+    -- Clean up
+    glDisableVertexAttribArray vertexAttribute
+    glBindBuffer gl_ARRAY_BUFFER 0
+    glUseProgram 0
+
 --------------------------------------------------------------------------------
 --  Shaders
 
@@ -79,6 +162,7 @@ makeProgram v f = do
     printLog prog gl_LINK_STATUS glGetProgramiv glGetProgramInfoLog
     glDeleteShader vert
     glDeleteShader frag
+    glLinkProgram prog
     return prog
 
 linkProgram :: Shader -> Shader -> IO Program
@@ -92,15 +176,18 @@ linkProgram vert frag = do
 --------------------------------------------------------------------------------
 --  Misc OpenGL functions
 
-buffer :: Storable a => GLenum -> GLenum -> V.Vector a -> IO GLuint
-buffer target hint (buf :: V.Vector a) = do
-    gid <- point (glGenBuffers 1)
+newBuffer :: Storable a => GLenum -> GLenum -> VS.Vector a -> IO GLuint
+newBuffer target hint (buf :: VS.Vector a) = do
+    gid <- alloca' (glGenBuffers 1)
     glBindBuffer target gid
-    V.unsafeWith buf (\ptr -> 
-        glBufferData target size ptr hint)
+    VS.unsafeWith buf (\ptr -> glBufferData target size ptr hint)
+    glBindBuffer target 0
     return gid
   where
-    size = fromIntegral (sizeOf (undefined :: a) * V.length buf)
+    size = fromIntegral (sizeOf (undefined :: a) * VS.length buf)
+
+staticArray :: Storable a => VS.Vector a -> IO GLuint
+staticArray = newBuffer gl_ARRAY_BUFFER gl_STATIC_DRAW
 
 -- | Print the OpenGL compile log
 printLog 
@@ -110,25 +197,10 @@ printLog
     -> (GLuint -> GLsizei -> Ptr GLsizei -> Ptr GLchar -> IO ()) 
     -> IO ()
 printLog gid from getLog getInfoLog = do
-    result <- point (getLog gid from)
-    len    <- point (getLog gid gl_INFO_LOG_LENGTH)
+    result <- alloca' (getLog gid from)
+    len    <- alloca' (getLog gid gl_INFO_LOG_LENGTH)
     log'   <- mallocArray (fromIntegral len)
     getInfoLog gid len nullPtr log'
     puts log'
     free log'
-
---------------------------------------------------------------------------------
---  Misc helper functions
-
-foreign import ccall "stdio.h puts" puts :: CString -> IO ()
-
--- | Temporarily allocate a pointer for some function, read it, then 
--- free the pointer, but return the read value.
-point :: Storable a => (Ptr a -> IO b) -> IO a
-point f = do
-    x' <- malloc
-    f x'
-    x <- peek x'
-    free x'
-    return x
 
