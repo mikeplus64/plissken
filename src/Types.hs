@@ -1,12 +1,8 @@
-{-# LANGUAGE BangPatterns, TypeOperators, TypeFamilies #-}
 {-# OPTIONS_GHC -funbox-strict-fields #-}
 module Types where
-import Data.Array.Repa
-import Data.Array.Repa.Repr.Vector
 import Data.Vector.Storable
-import Data.Word
+import qualified Data.Vector as V
 import Data.IORef
-import Data.Fixed
 import Linear
 import Graphics.Rendering.OpenGL.Raw
 
@@ -38,3 +34,33 @@ data Block
     | Danger !Danger
     | Spawn
   deriving (Eq, Ord, Show, Read)
+
+data Scene = Scene
+    { models         :: !(IORef (V.Vector Model))
+    }
+
+data Model = Model
+    { offsetR        :: !(IORef Vec)
+    , rotationR      :: !(IORef Rot)
+    , scaleR         :: !(IORef Vec)
+    , offset         :: !Uniform
+    , rotation       :: !Uniform
+    , scale          :: !Uniform
+    , vertices       :: !GLuint
+    , normals        :: !GLuint
+    , uvs            :: !GLuint
+    , size           :: !GLsizei
+    , linkedProgram  :: !Program
+    }
+
+type Shader     = GLuint
+type ShaderType = GLenum
+type Program    = GLuint
+
+type Uniform = GLint
+
+data ModelData = MD
+    { mVertices      :: !(Vector GLfloat)
+    , mVertexNormals :: !(Vector GLfloat)
+    , mUVs           :: !(Vector GLfloat)
+    } deriving Show
