@@ -1,4 +1,4 @@
-{-# LANGUAGE ForeignFunctionInterface, MagicHash, FlexibleInstances, OverloadedStrings, StandaloneDeriving, GeneralizedNewtypeDeriving, MultiParamTypeClasses #-}
+{-# LANGUAGE ForeignFunctionInterface, MagicHash, FlexibleInstances, OverloadedStrings, StandaloneDeriving, GeneralizedNewtypeDeriving, MultiParamTypeClasses, TypeFamilies #-}
 module Util where
 import System.IO.Unsafe
 import Foreign.C
@@ -7,16 +7,15 @@ import Data.String
 import GHC.Base
 import GHC.Ptr
 import Control.Monad
-
 import Graphics.Rendering.OpenGL.Raw
+import Debug.Trace
+import qualified Data.Vector.Mutable as V
 
-{-
-import Numeric.LinearAlgebra
-import Data.Packed.Development
-import Data.Packed.Vector
--}
-import qualified Data.Vector.Storable as V
-import qualified Data.Vector.Generic as G
+tr :: String -> a -> a
+tr = trace
+
+tri :: (Functor m, Show a) => String -> m a -> m a
+tri l = fmap (\x -> tr (l ++ show x) x)
 
 foreign import ccall "stdio.h puts" 
     puts :: CString -> IO ()
@@ -30,11 +29,6 @@ foreign import ccall "stdio.h stderr"
 putError :: CString -> IO ()
 putError = fputs stderr
 
--- | Reverse function application
-(&) :: a -> (a -> b) -> b
-x & f = f x
-infixl 1 &
-
 orFail :: IO Bool -> String -> IO ()
 orFail x err = do
     b <- x
@@ -42,11 +36,18 @@ orFail x err = do
 infixl 0 `orFail`
 
 while :: IO Bool -> IO a -> IO ()
-while pred block = loop
+while predicate block = loop
   where
     loop = do
-        ok <- pred
-        when ok (do block; loop)
+        ok <- predicate
+        when ok (block >> loop)
+
+{-# INLINE for #-}
+for :: (Ord b, Num b) => b -> b -> (b -> IO a) -> IO ()
+for lim z f = go 0
+  where
+    go i | i < lim   = f i >> go (i+z)
+         | otherwise = return ()
 
 {-# NOINLINE unsafePackCString #-}
 unsafePackCString :: String -> CString
@@ -75,20 +76,36 @@ instance Num (Ptr a) where
     signum      = wordPtrToPtr . signum . ptrToWordPtr
     negate      = wordPtrToPtr . negate . ptrToWordPtr
 
-{-
-withMatrix :: Element e => (Ptr e -> IO a) -> Matrix e -> IO a
-withMatrix f m = do
-    let (fp, _, _) = V.unsafeToForeignPtr (V.convert (flatten m))
-    withForeignPtr fp f
-
-withVector :: Element e => (Ptr e -> IO a) -> Vector e -> IO a
-withVector f v = do
-    let (fp, _, _) = V.unsafeToForeignPtr (V.convert v)
-    withForeignPtr fp f
-
-instance Element GLfloat
--}
-
 alloca' :: Storable a => (Ptr a -> IO b) -> IO a
 alloca' f = alloca (\ptr -> f ptr >> peek ptr)
+
+forIOV :: V.IOVector a -> (a -> IO b) -> IO ()
+forIOV v f = go 0
+  where
+    len  = V.length v
+    go i = when (i < len) $ do 
+        f =<< V.unsafeRead v i
+        go (i+1)
+
+updateAllIOV' :: V.IOVector a -> (a -> IO a) -> IO ()
+updateAllIOV' v f = go 0
+  where
+    len  = V.length v
+    go i = when (i < len) $ do 
+        V.unsafeWrite v i 
+            =<< f 
+            =<< V.unsafeRead v i
+        go (i + 1)
+
+
+updateAllIOV :: V.IOVector a -> (a -> a) -> IO ()
+updateAllIOV v f = go 0
+  where
+    len  = V.length v
+    go i = when (i < len) $ do 
+        V.unsafeWrite v i . f 
+            =<< V.unsafeRead v i
+        go (i + 1)
+
+data family Building a
 
