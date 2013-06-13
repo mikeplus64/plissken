@@ -41,13 +41,6 @@ makeLenses ''ModelT
 type Model   = ModelT V.Vector
 type Hull    = ModelT V.Vector
 
-data Renderable = Renderable
-    { rVerts  :: !(S.Vector GLfloat)
-    , rNorms  :: !(S.Vector GLfloat)
-    , rUVs    :: !(S.Vector GLfloat)
-    , rFaces  :: !(S.Vector GLushort)
-    }
-
 --------------------------------------------------------------------------------
 --  Building models from .obj
 
@@ -79,26 +72,3 @@ buildFromObj obj = switchModelType
     (V.fromList . DL.toList) 
     (execState (mapM_ addObjCommand obj) emptyDListModel)
 
-
---------------------------------------------------------------------------------
--- OpenGL stuff
---
-
-openGLModel :: Model -> Renderable
-openGLModel (Model v n u f)
-    = Renderable
-        (convertBy v3ToGLfloats v)
-        (convertBy v3ToGLfloats n)
-        (convertBy v2ToGLfloats u)
-        (convertBy faceToGLushort f)
-  where
-    convertBy :: S.Storable b => (a -> V.Vector b) -> V.Vector a -> S.Vector b
-    convertBy through xs = V.convert (V.concatMap through xs)
-
-    v3ToGLfloats   (V3 x y z)   = V.map realToFrac (V.fromList [x,y,z])
-    v2ToGLfloats   (V2 x y)     = V.map realToFrac (V.fromList [x,y])
-
-    faceToGLushort (Verts i j k)                         = V.map fromIntegral (V.fromList [i,j,k])
-    faceToGLushort (VertTex (i,_) (j,_) (k,_))           = V.map fromIntegral (V.fromList [i,j,k])
-    faceToGLushort (VertNorm (i,_) (j,_) (k,_))          = V.map fromIntegral (V.fromList [i,j,k])
-    faceToGLushort (VertTexNorm (i,_,_) (j,_,_) (k,_,_)) = V.map fromIntegral (V.fromList [i,j,k])
