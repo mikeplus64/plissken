@@ -1,7 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables, OverloadedStrings, RecordWildCards, BangPatterns #-}
 {-# OPTIONS_GHC -funbox-strict-fields #-}
 module Engine where
-import qualified Data.Vector.Storable as VS
+import qualified Data.Vector.Storable as S
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as VM
 import qualified Graphics.UI.GLFW as GLFW
@@ -18,8 +18,10 @@ import Data.Bits
 import Linear hiding (norm)
 
 import Util
-import Model
+import qualified OBJ
+import qualified Model as M
 
+{-
 newScene :: [Model] -> [Block] -> IO Scene
 newScene ms bs 
     = Scene <$> pure (V.fromList ms) 
@@ -43,6 +45,10 @@ drawScene s = do
 --------------------------------------------------------------------------------
 --  Uniforms
 
+    -}
+
+type Uniform = GLint
+
 newUniform :: CString -> Program -> IO Uniform
 newUniform name prog = fromIntegral
     `fmap` glGetUniformLocation prog name
@@ -50,17 +56,58 @@ newUniform name prog = fromIntegral
 --------------------------------------------------------------------------------
 --  Models
 
+data GLmodel = GLmodel
+    { setModelOffset :: !(V3 GLfloat -> IO ())
+    , setModelRotate :: !(Quaternion GLfloat -> IO ())
+    , setModelScale  :: !(V3 GLfloat -> IO ())
+    , drawModel      :: !(IO ())
+    }
+
+{-# INLINE loadModel #-}
+loadModel :: FilePath -> FilePath -> FilePath -> IO GLmodel
+loadModel model vshad fshad = do
+    Right obj <- OBJ.readObj model
+    fromModel (M.buildFromObj obj) vshad fshad
+
 vertexAttribute, uvAttribute, normalAttribute :: GLuint
 vertexAttribute = 0
 uvAttribute     = 1
 normalAttribute = 2
 
-newModel :: Vertices -> Normals -> UVs -> Elements -> GLSL -> GLSL -> IO Model
-newModel vert norm uv elems vshad fshad = do
+{-# INLINE fromModel #-}
+fromModel :: M.Model -> FilePath -> FilePath -> IO GLmodel
+fromModel (M.Model v n u f) = 
+    newGLmodel (convertBy v3ToGLfloats v)
+               (convertBy v3ToGLfloats n)
+               (convertBy v2ToGLfloats u)
+               (convertBy faceToGLushort f)
+  where
+    convertBy :: S.Storable b => (a -> V.Vector b) -> V.Vector a -> S.Vector b
+    convertBy through xs = V.convert (V.concatMap through xs)
+
+    v3ToGLfloats :: V3 GLfloat -> V.Vector GLfloat
+    v3ToGLfloats   (V3 x y z) = V.map realToFrac (V.fromList [x,y,z])
+
+    v2ToGLfloats :: V2 GLfloat -> V.Vector GLfloat
+    v2ToGLfloats   (V2 x y) = V.map realToFrac (V.fromList [x,y])
+
+    faceToGLushort :: M.Face -> V.Vector GLushort
+    faceToGLushort (M.Verts i j k)                         = V.map fromIntegral (V.fromList [i,j,k])
+    faceToGLushort (M.VertTex (i,_) (j,_) (k,_))           = V.map fromIntegral (V.fromList [i,j,k])
+    faceToGLushort (M.VertNorm (i,_) (j,_) (k,_))          = V.map fromIntegral (V.fromList [i,j,k])
+    faceToGLushort (M.VertTexNorm (i,_,_) (j,_,_) (k,_,_)) = V.map fromIntegral (V.fromList [i,j,k])
+
+-- | 'newGLmodel' vertices normals uvs indices vertexShader fragmentShader
+{-# INLINE newGLmodel #-}
+newGLmodel :: S.Vector GLfloat 
+           -> S.Vector GLfloat 
+           -> S.Vector GLfloat 
+           -> S.Vector GLushort 
+           -> FilePath -> FilePath -> IO GLmodel
+newGLmodel vert norm uv elems vshad fshad = do
     moffset       <- newIORef (V3 0 0 0)                 -- offset
     mrotation     <- newIORef (Quaternion 0 (V3 0 0 0))  -- rotation
     mscale        <- newIORef (V3 1 1 1)                 -- scale
-
     linkedProgram <- makeProgram vshad fshad
     offset        <- newUniform "offset" linkedProgram
     rotation      <- newUniform "rotation" linkedProgram
@@ -69,20 +116,20 @@ newModel vert norm uv elems vshad fshad = do
     normals       <- staticArray norm
     uvs           <- staticArray uv
     elements      <- staticElementArray elems
-    let !size = 2*fromIntegral (VS.length vert)
-        !draw = do
+    return GLmodel
+        { setModelOffset = writeIORef moffset
+        , setModelRotate = writeIORef mrotation
+        , setModelScale  = writeIORef mscale
+        , drawModel = do
             -- Read offset/rotation/scale data from model
             offsetv <- readIORef moffset
             rotatev <- readIORef mrotation
             scalev  <- readIORef mscale
-
             glUseProgram linkedProgram
-
             -- Upload uniforms to the shader
             uniformFromVec  offset   offsetv
             uniformFromQuat rotation rotatev
             uniformFromVec  scale    scalev
-            
             -- Vertice attribute buffer
             glEnableVertexAttribArray vertexAttribute
             glBindBuffer gl_ARRAY_BUFFER vertices
@@ -93,7 +140,6 @@ newModel vert norm uv elems vshad fshad = do
                 (fromIntegral gl_FALSE)
                 0 
                 0
-
             -- UV attribute buffer
             glEnableVertexAttribArray uvAttribute
             glBindBuffer gl_ARRAY_BUFFER uvs
@@ -104,7 +150,7 @@ newModel vert norm uv elems vshad fshad = do
                 (fromIntegral gl_FALSE)
                 0
                 0
-
+            -- Normal attribute buffer
             glEnableVertexAttribArray normalAttribute
             glBindBuffer gl_ARRAY_BUFFER normals
             glVertexAttribPointer
@@ -114,44 +160,32 @@ newModel vert norm uv elems vshad fshad = do
                 (fromIntegral gl_FALSE)
                 0
                 0
-
             -- Vertex indices
             glBindBuffer gl_ELEMENT_ARRAY_BUFFER elements
-
             glDrawElements gl_TRIANGLES size gl_UNSIGNED_SHORT 0
-            
-            {-
-            glDrawArrays gl_TRIANGLES 0 (size m `div` 12)
-            -}
-
             -- Clean up
             glDisableVertexAttribArray vertexAttribute
             glDisableVertexAttribArray uvAttribute
             glUseProgram 0
-    return Model{..}
+        }
+  where
+    !size = 2*fromIntegral (S.length vert)
 
-mdToModel :: ModelData -> FilePath -> FilePath -> IO Model
-mdToModel MD{..} = newModel mVertices mVertexNormals mUVs mIndices
-
-swapModelVecs :: Model -> IORef Vec -> IORef Rot -> IORef Vec -> Model
-swapModelVecs m off rot scl = m{ moffset = off, mrotation = rot, mscale = scl }
-
-uniformFromVec :: GLint -> Vec -> IO ()
+uniformFromVec :: GLint -> V3 GLfloat -> IO ()
 uniformFromVec un (V3 x y z) = glUniform3f un x y z
 
-uniformFromQuat :: GLint -> Rot -> IO ()
+uniformFromQuat :: GLint -> Quaternion GLfloat -> IO ()
 uniformFromQuat un (Quaternion w (V3 x y z)) = glUniform4f un x y z w
-
-drawModel :: Model -> IO ()
-drawModel (Model _ _ _ d) = d
 
 --------------------------------------------------------------------------------
 --  Shaders
 --
 
+
 -- | Convenient aliases
 type Shader  = GLuint
 type Program = GLuint
+type ShaderType = GLenum
 
 -- | Load a shader from a file
 loadShader :: FilePath -> ShaderType -> IO Shader
@@ -193,29 +227,29 @@ printLog
     -> (GLuint -> GLsizei -> Ptr GLsizei -> Ptr GLchar -> IO ()) 
     -> IO ()
 printLog gid from getLog getInfoLog = do
-    result <- alloca' (getLog gid from)
-    len    <- alloca' (getLog gid gl_INFO_LOG_LENGTH)
-    log'   <- mallocArray (fromIntegral len)
+    _result <- alloca' (getLog gid from)
+    len     <- alloca' (getLog gid gl_INFO_LOG_LENGTH)
+    log'    <- mallocArray (fromIntegral len)
     getInfoLog gid len nullPtr log'
     puts log'
 
 --------------------------------------------------------------------------------
 --  Buffer creation
 
-newBuffer :: Storable a => GLenum -> GLenum -> VS.Vector a -> IO GLuint
-newBuffer target hint (buf :: VS.Vector a) = do
+newBuffer :: Storable a => GLenum -> GLenum -> S.Vector a -> IO GLuint
+newBuffer target hint (buf :: S.Vector a) = do
     gid <- alloca' (glGenBuffers 1)
     glBindBuffer target gid
-    VS.unsafeWith buf (\ptr -> glBufferData target size ptr hint)
+    S.unsafeWith buf (\ptr -> glBufferData target size ptr hint)
     glBindBuffer target 0
     return gid
   where
-    size = fromIntegral (sizeOf (undefined :: a) * VS.length buf)
+    size = fromIntegral (sizeOf (undefined :: a) * S.length buf)
 
-staticArray :: Storable a => VS.Vector a -> IO GLuint
+staticArray :: Storable a => S.Vector a -> IO GLuint
 staticArray = newBuffer gl_ARRAY_BUFFER gl_STATIC_DRAW
 
-staticElementArray :: Storable a => VS.Vector a -> IO GLuint
+staticElementArray :: Storable a => S.Vector a -> IO GLuint
 staticElementArray = newBuffer gl_ELEMENT_ARRAY_BUFFER gl_STATIC_DRAW
 
 
