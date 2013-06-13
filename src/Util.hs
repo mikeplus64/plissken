@@ -1,15 +1,24 @@
 {-# LANGUAGE ForeignFunctionInterface, MagicHash, FlexibleInstances, OverloadedStrings, StandaloneDeriving, GeneralizedNewtypeDeriving, MultiParamTypeClasses, TypeFamilies #-}
 module Util where
-import System.IO.Unsafe
 import Foreign.C
 import Foreign hiding (unsafePerformIO)
 import Data.String
 import GHC.Base
 import GHC.Ptr
 import Control.Monad
-import Graphics.Rendering.OpenGL.Raw
 import Debug.Trace
 import qualified Data.Vector.Mutable as V
+import System.IO.Unsafe
+import qualified System.IO as IO
+import qualified Data.Text as T
+import qualified Data.Text.Internal as T
+import qualified Data.Text.Internal as T
+import qualified Data.Text.Array as T
+
+warning :: String -> a -> a
+warning s a = unsafePerformIO $ do
+    IO.hPutStr IO.stderr ("warning: " ++ s)
+    return a
 
 tr :: String -> a -> a
 tr = trace
@@ -106,6 +115,4 @@ updateAllIOV v f = go 0
         V.unsafeWrite v i . f 
             =<< V.unsafeRead v i
         go (i + 1)
-
-data family Building a
 
