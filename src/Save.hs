@@ -1,3 +1,4 @@
+module Save where
 import qualified Data.Map.Strict as M
 import qualified Data.Vector as V
 import qualified Data.Text as T
@@ -5,8 +6,6 @@ import qualified Data.Text.IO as T
 import qualified Data.Attoparsec.Text as A
 import Control.Monad.State
 import Control.Applicative
-import Control.Monad
-import Data.Monoid
 import Data.List
 
 class Savable a where
@@ -15,32 +14,29 @@ class Savable a where
 
 type Config = M.Map Key Value
 
-data Type = TN | TT | TL !Type | THL [Type]
+data Type 
+    = TN -- ^ natural number
+    | TT -- ^ text
+    | TL !Type -- ^ homogenous list
+    | THL (V.Vector Type) -- ^ heterogenous list
   deriving (Show,Read,Eq,Ord)
 
 data Key  = Key [T.Text] !Type
   deriving (Eq,Ord)
 
-typed :: String -> Type -> Key
-typed str t = Key (split (== '.') str) t
-  where
-    split :: Eq a => (a -> Bool) -> [a] -> [[a]]
-    split f = foldr 
-        (\x (splits, acc) 
-         -> if f x
-            then (splits ++ [acc], [])
-            else (splits, x:acc))
-        []
+typed :: T.Text -> Type -> Key
+typed = Key . T.split (== '.')
 
 (=:) :: Key -> Value -> (Key,Value)
 (=:) = (,)
 
 instance Show Key where
-    show (Key ks t) = intercalate "." (map T.unpack ks)
+    show (Key ks _) = intercalate "." (map T.unpack ks)
 
-data Value = N !A.Number
-           | T !T.Text
-           | L !(V.Vector Value)
+data Value 
+    = N !A.Number
+    | T !T.Text
+    | L !(V.Vector Value)
   deriving (Eq,Ord)
 
 instance Show Value where
@@ -54,14 +50,16 @@ valType (T _)  = TT
 valType (L vs) = 
     if V.all (\v -> Just v == vs V.!? 0) vs
     then TL (valType (V.head vs))
-    else THL (map valType vs)
+    else THL (V.map valType vs)
 
 okType :: Value -> Type -> Bool
 okType (N _) TN       = True
 okType (T _) TT       = True
-okType (L v) (TL t)   = valType v == t
+okType (L v) (TL t)   = case v V.!? 0 of
+    Just h -> valType h == t
+    _      -> False
 okType (L l) (THL ts) = V.and (V.zipWith (\v t -> valType v == t) l ts)
-okType _     _ = False
+okType _     _        = False
 
 readValue :: Key -> Config -> Maybe Value
 readValue key@(Key _ type_) conf = do
@@ -124,4 +122,5 @@ readConfig path = do
     case A.parseOnly (parseKeyValues M.empty) cfg of
         Right c -> return c
         Left e  -> error e
+
 
