@@ -1,4 +1,4 @@
-{-# LANGUAGE ScopedTypeVariables, OverloadedStrings, RecordWildCards, BangPatterns #-}
+{-# LANGUAGE ScopedTypeVariables, OverloadedStrings, RecordWildCards, BangPatterns, NamedFieldPuns, ForeignFunctionInterface #-}
 {-# OPTIONS_GHC -funbox-strict-fields #-}
 module Engine where
 import qualified Data.Vector.Storable as S
@@ -15,37 +15,27 @@ import Foreign
 import qualified Data.ByteString as B
 import Data.Bits
 
-import Linear hiding (norm)
+import Data.Packed.Foreign
+import Data.Packed.Development
 
 import Util
 import qualified OBJ
 import qualified Model as M
+import Physics
+import Linear
+import Numeric.LinearAlgebra
 
-{-
-newScene :: [Model] -> [Block] -> IO Scene
-newScene ms bs 
-    = Scene <$> pure (V.fromList ms) 
-            <*> V.unsafeThaw (V.fromList bs)
+foreign import ccall "test.c" printMat44 :: Ptr GLfloat -> IO ()
 
-drawScene :: Scene -> IO ()
-drawScene s = do
-    glClearColor 0 0 0 0
-    glClear (gl_COLOR_BUFFER_BIT .|. gl_DEPTH_BUFFER_BIT)
-    glEnable gl_DEPTH_TEST
-    glDepthFunc gl_LESS
-    glLoadIdentity
-    gluPerspective 90 (4/3) 1 100
-    forIOV (blocks s) $ \ b -> 
-        draw (models s V.! fromEnum (blockType b))
+clear ::IO ()
+clear = glClear (gl_COLOR_BUFFER_BIT .|. gl_DEPTH_BUFFER_BIT)
     
 --------------------------------------------------------------------------------
 --  Vectors
--- using hmatrix now, everything is roses
+-- using linear now, everything is roses
 
 --------------------------------------------------------------------------------
 --  Uniforms
-
-    -}
 
 type Uniform = GLint
 
@@ -55,13 +45,6 @@ newUniform name prog = fromIntegral
 
 --------------------------------------------------------------------------------
 --  Models
-
-data GLmodel = GLmodel
-    { setModelOffset :: !(V3 GLfloat -> IO ())
-    , setModelRotate :: !(Quaternion GLfloat -> IO ())
-    , setModelScale  :: !(V3 GLfloat -> IO ())
-    , drawModel      :: !(IO ())
-    }
 
 {-# INLINE loadModel #-}
 loadModel :: FilePath -> FilePath -> FilePath -> IO GLmodel
@@ -97,6 +80,17 @@ fromModel (M.Model v n u f) =
     faceToGLushort (M.VertNorm (i,_) (j,_) (k,_))          = V.map fromIntegral (V.fromList [i,j,k])
     faceToGLushort (M.VertTexNorm (i,_,_) (j,_,_) (k,_,_)) = V.map fromIntegral (V.fromList [i,j,k])
 
+data GLmodel = GLmodel
+    { vertArray :: !GLuint
+    , normArray :: !GLuint
+    , uvArray   :: !GLuint
+    , ixArray   :: !GLuint
+    , program   :: !Program
+    , mvpU      :: !Uniform
+    , arrSize   :: !GLsizei
+    }
+
+
 -- | 'newGLmodel' vertices normals uvs indices vertexShader fragmentShader
 {-# INLINE newGLmodel #-}
 newGLmodel :: S.Vector GLfloat 
@@ -104,78 +98,69 @@ newGLmodel :: S.Vector GLfloat
            -> S.Vector GLfloat 
            -> S.Vector GLushort 
            -> FilePath -> FilePath -> IO GLmodel
-newGLmodel vert norm uv elems vshad fshad = do
-    moffset       <- newIORef (V3 0 0 0)                 -- offset
-    mrotation     <- newIORef (Quaternion 0 (V3 0 0 0))  -- rotation
-    mscale        <- newIORef (V3 1 1 1)                 -- scale
-    linkedProgram <- makeProgram vshad fshad
-    offset        <- newUniform "offset" linkedProgram
-    rotation      <- newUniform "rotation" linkedProgram
-    scale         <- newUniform "scale" linkedProgram
-    vertices      <- staticArray vert
-    normals       <- staticArray norm
-    uvs           <- staticArray uv
-    elements      <- staticElementArray elems
-    return GLmodel
-        { setModelOffset = writeIORef moffset
-        , setModelRotate = writeIORef mrotation
-        , setModelScale  = writeIORef mscale
-        , drawModel = do
-            -- Read offset/rotation/scale data from model
-            offsetv <- readIORef moffset
-            rotatev <- readIORef mrotation
-            scalev  <- readIORef mscale
-            glUseProgram linkedProgram
-            -- Upload uniforms to the shader
-            uniformFromVec  offset   offsetv
-            uniformFromQuat rotation rotatev
-            uniformFromVec  scale    scalev
-            -- Vertice attribute buffer
-            glEnableVertexAttribArray vertexAttribute
-            glBindBuffer gl_ARRAY_BUFFER vertices
-            glVertexAttribPointer
-                vertexAttribute 
-                3 
-                gl_FLOAT 
-                (fromIntegral gl_FALSE)
-                0 
-                0
-            -- UV attribute buffer
-            glEnableVertexAttribArray uvAttribute
-            glBindBuffer gl_ARRAY_BUFFER uvs
-            glVertexAttribPointer
-                uvAttribute
-                2
-                gl_FLOAT
-                (fromIntegral gl_FALSE)
-                0
-                0
-            -- Normal attribute buffer
-            glEnableVertexAttribArray normalAttribute
-            glBindBuffer gl_ARRAY_BUFFER normals
-            glVertexAttribPointer
-                normalAttribute
-                3
-                gl_FLOAT
-                (fromIntegral gl_FALSE)
-                0
-                0
-            -- Vertex indices
-            glBindBuffer gl_ELEMENT_ARRAY_BUFFER elements
-            glDrawElements gl_TRIANGLES size gl_UNSIGNED_SHORT 0
-            -- Clean up
-            glDisableVertexAttribArray vertexAttribute
-            glDisableVertexAttribArray uvAttribute
-            glUseProgram 0
-        }
-  where
-    !size = 2*fromIntegral (S.length vert)
+newGLmodel !vert !norm !uv !elems !vshad !fshad = do
+    program       <- makeProgram vshad fshad
+    mvpU          <- newUniform "mvp" program
+    vertArray     <- staticArray vert
+    normArray     <- staticArray norm
+    uvArray       <- staticArray uv
+    ixArray       <- staticElementArray elems
+    return GLmodel{ arrSize = 2*fromIntegral (S.length vert), .. }
 
-uniformFromVec :: GLint -> V3 GLfloat -> IO ()
-uniformFromVec un (V3 x y z) = glUniform3f un x y z
+drawModel :: GLmodel -> Matrix Float -> IO ()
+drawModel GLmodel{..} !mvp = do
+    glUseProgram program
+    glUniformMatrix4fv mvpU 1 1 . castPtr `appMatrix` mvp
 
-uniformFromQuat :: GLint -> Quaternion GLfloat -> IO ()
-uniformFromQuat un (Quaternion w (V3 x y z)) = glUniform4f un x y z w
+{-
+    n <- newArray (replicate 16 0)
+    glGetUniformfv program mvpU n
+    printMat44 n
+    free n
+-}
+
+    -- Vertice attribute buffer
+    glEnableVertexAttribArray vertexAttribute
+    glBindBuffer gl_ARRAY_BUFFER vertArray
+    glVertexAttribPointer
+        vertexAttribute 
+        3 
+        gl_FLOAT 
+        0
+        0 
+        nullPtr
+
+    -- UV attribute buffer
+    glEnableVertexAttribArray uvAttribute
+    glBindBuffer gl_ARRAY_BUFFER uvArray
+    glVertexAttribPointer
+        uvAttribute
+        2
+        gl_FLOAT
+        0
+        0
+        nullPtr
+
+    -- Normal attribute buffer
+    glEnableVertexAttribArray normalAttribute
+    glBindBuffer gl_ARRAY_BUFFER normArray
+    glVertexAttribPointer
+        normalAttribute
+        3
+        gl_FLOAT
+        0
+        0
+        nullPtr
+
+    -- Vertex indices
+    glBindBuffer gl_ELEMENT_ARRAY_BUFFER ixArray
+
+    glDrawElements gl_TRIANGLES arrSize gl_UNSIGNED_SHORT 0
+    -- Clean up
+    glDisableVertexAttribArray vertexAttribute
+    glDisableVertexAttribArray uvAttribute
+    glDisableVertexAttribArray normalAttribute
+    glUseProgram 0
 
 --------------------------------------------------------------------------------
 --  Shaders
@@ -206,7 +191,7 @@ makeProgram v f = do
     prog <- linkProgram vert frag
     glLinkProgram prog
     printLog prog gl_COMPILE_STATUS glGetProgramiv glGetProgramInfoLog
-    printLog prog gl_LINK_STATUS glGetProgramiv glGetProgramInfoLog
+    -- printLog prog gl_LINK_STATUS glGetProgramiv glGetProgramInfoLog
     glDeleteShader vert
     glDeleteShader frag
     return prog
