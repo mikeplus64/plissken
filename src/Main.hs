@@ -50,6 +50,7 @@ main = do
     GLFW.initialize
     GLFW.openWindow GLFW.defaultDisplayOptions
         { GLFW.displayOptions_windowIsResizable = False
+        , GLFW.displayOptions_numFsaaSamples    = Just 8
         }
     GLFW.enableKeyRepeat
     GLFW.enableAutoPoll
@@ -60,9 +61,14 @@ main = do
         GLFW.setWindowDimensions 512 512
     GLFW.setWindowDimensions 512 512
 
-    bevelCube <- loadModel "data/models/bevelcube.obj" "data/models/basic.vert" "data/models/background.frag" $ \prog -> do
-        mvp <- newUVec4 prog "mvp"
-        return (UMat4 mvp Uz)
+    bevelCube <- loadModel "data/models/bevelcube.obj" "data/models/basic.vert" "data/models/block.frag" $ \prog -> do
+        mvp     <- newUMat4 prog "MVP"
+        m       <- newUMat4 prog "M"
+        v       <- newUMat4 prog "V"
+        p       <- newUMat4 prog "P"
+        diffuse <- newUVec4 prog "diffuse"
+        return . UMat4 mvp . UMat4 m . UMat4 v . UMat4 p
+               . UVec4 diffuse $ Uz
 
     mainmenu <- newMenu (mainMenu open) $ \ !sel !down !item !dyn -> do
         putStr (show sel)
@@ -75,6 +81,7 @@ main = do
     -- target'     <- newIORef (vec3 0 0 0)
     up'         <- newIORef (vec3 0 1 0)
     model'      <- newIORef (vec3 0 0 0)
+    modelm'     <- newIORef (translation (vec3 0 0 0))
     view'       <- newIORef (lookAt (- vec3 2 2 2) (vec3 0 0 0) (vec3 0 1 0))
     projection' <- newIORef (perspective 90 1 0.001 100)
     mvp         <- newIORef 0
@@ -90,7 +97,9 @@ main = do
             model  <- readIORef model'
             view   <- readIORef view'
             proj   <- readIORef projection'
-            writeIORef mvp $! proj `mXm` view `mXm` translation model
+            let !m = translation model
+            writeIORef modelm' m
+            writeIORef mvp $! proj `mXm` view `mXm` m
 
     updateView
     updateMVP
@@ -134,16 +143,24 @@ main = do
             )
     -}
 
-    glClearColor 0.5 0.6 0.7 1
+    glClearColor 0.1 0.1 0.1 1
     glEnable gl_DEPTH_TEST
     glDepthFunc gl_LESS
-    glEnable gl_CULL_FACE
+
+    glEnable gl_SMOOTH
+    glEnable gl_BLEND
+    glBlendFunc gl_SRC_ALPHA gl_ONE_MINUS_SRC_ALPHA
 
     while open (do
         clear 
 
-        drawModel bevelCube =<< readIORef mvp
+        mvp' <- readIORef mvp
+        m'   <- readIORef modelm'
+        v'   <- readIORef view'
+        p'   <- readIORef projection'
 
+        drawModel bevelCube mvp' m' v' p'
+            (vec4 0.1 0.1 0.2 1)
 
         -- Through experimentation I found GLFW.swapBuffers would take almost 
         -- exactly 1.666e-2 seconds to complete. This is 1/60 seconds! 
