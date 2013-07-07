@@ -1,31 +1,16 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -funbox-strict-fields #-}
-module OBJ where
+module OBJ 
+    ( OBJ, ObjCommand(..)
+    , readObj) where
 import qualified Data.Attoparsec as A
 import Data.Attoparsec.Char8
 import qualified Data.ByteString.Char8 as B
 import Data.ByteString.Char8 (ByteString)
 
-import qualified Data.Vector.Storable         as V
-import qualified Data.Vector.Storable.Mutable as V
-
-import Control.Monad.State.Strict
-import Control.Monad
-import Control.Monad.ST
-import Control.Lens
 import Control.Applicative
+import Geometry (F,I,I2,I3)
 
-import Graphics.Rendering.OpenGL.Raw
-import Linear
-
-import Util
-
-type P = GLfloat
-
--- n indices
-type I = Int
-type I2 = (Int,Int)
-type I3 = (Int,Int,Int)
 
 -- | See http://en.wikipedia.org/wiki/Wavefront_.obj_file
 -- This type implements a single line of an obj file.
@@ -38,9 +23,9 @@ data ObjCommand
     | Object !ByteString
     | Group !ByteString
     | S !Bool
-    | V !P !P !P
-    | VT !P !P
-    | VN !P !P !P
+    | V !F !F !F
+    | VT !F !F
+    | VN !F !F !F
     | FV !I !I !I
     | FVT !I2 !I2 !I2
     | FVN !I2 !I2 !I2
@@ -71,11 +56,11 @@ parseObj = do
   where
     seperatedByLines f = f `sepBy` endOfLine
 
--- | Parse a floating point number.
+-- | Farse a floating point number.
 float :: (Fractional a, Real a) => Parser a
 float = fmap realToFrac double
 
--- | Parse something seperated by spaces.
+-- | Farse something seperated by spaces.
 spaced :: Parser a -> Parser [a]
 spaced f = f `sepBy` space
 
@@ -148,4 +133,3 @@ parseMTLlib :: Parser ObjCommand
 parseMTLlib = do
     string "mtllib "
     MTLlib `fmap` A.takeTill isEndOfLine
-
