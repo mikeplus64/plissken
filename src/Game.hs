@@ -8,8 +8,6 @@ import Data.Sequence (ViewL(..), ViewR(..), (|>), (<|), Seq)
 import qualified Data.Foldable as F
 import Data.Foldable (for_)
 
-import Linear
-
 import Control.Monad.State
 import Control.Arrow
 import Data.Maybe
@@ -17,21 +15,24 @@ import Data.Maybe
 import Control.Lens hiding ((<|), (|>))
 import Prelude hiding (head, last)
 
+import Physics
+import Menu
+
 (!.) :: s -> State s a -> s
 (!.) = flip execState
 
 infixr 0 !.
 
-type Pos = V3 Int
-type Vel = V3 Int
+type Pos = V
+type Vel = V
 
 type Positioned = M.Map Pos
 type OrderedPos = []
 
-x, y, z :: Vel
-x = V3 1 0 0
-y = V3 0 1 0
-z = V3 0 0 1
+x, y, z :: V
+x = vec3 1 0 0
+y = vec3 0 1 0
+z = vec3 0 0 1
 
 data Entity = Ent
     { _position     :: !Pos
@@ -66,13 +67,14 @@ data Block
 
 type Stage = Positioned Block
 
-data GameS = Game
-    { _stage        :: !Stage
-    , _snake        :: !Snake
-    , _score        :: !Int
-    , _gameTicks    :: !Integer
-    , _message      :: !(Maybe String)
-    } deriving (Show, Eq)
+data GameS
+    = Game  { _stage         :: !Stage
+            , _snake         :: !Snake
+            , _score         :: !Int
+            , _gameTicks     :: !Integer
+            , _message       :: !(Maybe String) 
+            , _gameIsPaused  :: !Bool
+            }
 
 makeLenses ''Flame
 makeLenses ''Entity
@@ -126,7 +128,7 @@ end s = do
 
 step :: Game ()
 step = do
-
+    False         <- view gameIsPaused
     Just newSnake <- uses snake stepSnakeAlone
     collisions    <- uses stage (collided newSnake)
 
