@@ -1,9 +1,7 @@
 {-# LANGUAGE TemplateHaskell, FunctionalDependencies, FlexibleInstances, RankNTypes #-}
 {-# OPTIONS_GHC -funbox-strict-fields #-}
 module Model where
-import OBJ
 
-import qualified Data.Vector        as V
 import qualified Data.DList         as DL
 
 import qualified Data.Vector.Storable as S
@@ -12,11 +10,15 @@ import Graphics.Rendering.OpenGL.Raw
 
 import Control.Monad.State.Strict
 import Control.Lens
-import Linear
+
+import Geometry
+import OBJ
 
 -- | A face is a triangle, defined by indices in _vertices, _normals and/or _uvs
 -- When a tuple is used, the order of indices is the same as the order of the compounded
 -- words for the constructor name.
+--
+-- As per .obj, indices start at 1, and /NOT/ 1.
 data Face
     -- | "f a b c d" in a .obj, corresponds to FV
     = Verts       !I       !I       !I
@@ -29,35 +31,37 @@ data Face
 
 -- | Generic 'Model' type. 
 data ModelT f = Model
-    { _vertices :: !(f (V3 P))
-    , _normals  :: !(f (V3 P))
-    , _uvs      :: !(f (V2 P))
-    , _faces    :: !(f Face)
+    { _mVertices :: !(f V3)
+    , _mNormals  :: !(f V3)
+    , _mUvs      :: !(f V2)
+    , _mFaces    :: !(f Face)
     }
 
-makeLenses ''ModelT
+data Mesh = Mesh
+    { _gVerts   :: !V
+    , _gNorms   :: !V
+    , _gUvs     :: !V
+    , _gFaces   :: !(Vector GLushort)
+    } deriving (Eq,Show,Read)
 
--- | 'Model' is suitable for actual use -- it's underlying type is 'V.Vector'
-type Model   = ModelT V.Vector
-type Hull    = ModelT V.Vector
+makeFields ''ModelT
+makeFields ''Mesh
 
 --------------------------------------------------------------------------------
 --  Building models from .obj
 
-switchModelType :: (forall a. f a -> g a) -> ModelT f -> ModelT g
-switchModelType morph (Model v n u f) = Model (morph v) (morph n) (morph u) (morph f)
-
 -- | 'Builder' is an efficient type used to /build/ a mesh from a list of .obj commands
 type Builder = State (ModelT DL.DList) ()
+type Built = ModelT []
 
 emptyDListModel :: ModelT DL.DList
 emptyDListModel = Model DL.empty DL.empty DL.empty DL.empty
 
 addObjCommand :: ObjCommand -> Builder
 addObjCommand obj = case obj of
-    V    x y z -> addTo vertices (V3 x y z)
-    VN   x y z -> addTo normals  (V3 x y z)
-    VT   x y   -> addTo uvs      (V2 x y)
+    V    x y z -> addTo vertices (vec3 x y z)
+    VN   x y z -> addTo normals  (vec3 x y z)
+    VT   x y   -> addTo uvs      (vec2 x y)
     FV   a b c -> addTo faces    (Verts a b c)
     FVT  a b c -> addTo faces    (VertTex a b c)
     FVN  a b c -> addTo faces    (VertNorm a b c)
@@ -67,8 +71,27 @@ addObjCommand obj = case obj of
     addTo :: Lens' (ModelT DL.DList) (DL.DList a) -> a -> Builder
     addTo label a = label %= (`DL.snoc` a)
 
-buildFromObj :: OBJ -> Model
-buildFromObj obj = switchModelType 
-    (V.fromList . DL.toList) 
-    (execState (mapM_ addObjCommand obj) emptyDListModel)
+runBuilder :: Builder -> Built
+runBuilder b = case execState b emptyDListModel of
+    Model v n u f -> Model (DL.toList v) (DL.toList n) (DL.toList u) (DL.toList f)
+
+faceToIndices :: Face -> [GLushort]
+faceToIndices = map (subtract 1 . fromIntegral) . toIndices
+  where
+    toIndices (Verts x y z)                         = [x,y,z]
+    toIndices (VertTex (x,_) (y,_) (z,_))           = [x,y,z]
+    toIndices (VertNorm (x,_) (y,_) (z,_))          = [x,y,z]
+    toIndices (VertTexNorm (x,_,_) (y,_,_) (z,_,_)) = [x,y,z]
+
+builtToMesh :: Built -> Mesh
+builtToMesh (Model v n u f) = Mesh
+    (S.concat v)
+    (S.concat n)
+    (S.concat u)
+    (S.fromList (concatMap faceToIndices f))
+
+loadMesh :: FilePath -> IO Mesh
+loadMesh path = do
+    Right obj <- readObj path
+    return $! builtToMesh . runBuilder $! forM_ obj addObjCommand
 
