@@ -12,7 +12,7 @@ module Geometry
     , module X
     ) where
 
-import Numeric.LinearAlgebra as X hiding (readMatrix, (|>))
+import Numeric.LinearAlgebra as X hiding (readMatrix, (|>), join)
 import Data.Packed.ST as X
 import Data.Packed.Foreign as X
 import Data.Packed.Vector as X
