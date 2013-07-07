@@ -1,4 +1,5 @@
 {-# LANGUAGE ScopedTypeVariables, OverloadedStrings, RecordWildCards, BangPatterns, NamedFieldPuns, ForeignFunctionInterface #-}
+{-# LANGUAGE GADTs, TypeFamilies, KindSignatures, DataKinds, PolyKinds, TypeOperators, EmptyDataDecls #-}
 {-# OPTIONS_GHC -funbox-strict-fields #-}
 module Engine where
 import qualified Data.Vector.Storable as S
@@ -6,59 +7,52 @@ import Graphics.Rendering.OpenGL.Raw
 import Foreign.C
 import Foreign
 import qualified Data.ByteString as B
+import Control.Monad
 
 import Data.Packed.Foreign
+import GHC.TypeLits
 
 import Util
 import Model
 import Geometry
+import Uniform
 
 clear :: IO ()
 clear = glClear (gl_COLOR_BUFFER_BIT .|. gl_DEPTH_BUFFER_BIT)
-
-frameInit :: IO ()
-frameInit = do
-    glPolygonMode gl_FRONT_AND_BACK gl_LINE
-    
---------------------------------------------------------------------------------
---  Vectors
--- using linear now, everything is roses
-
---------------------------------------------------------------------------------
---  Uniforms
-
-type Uniform = GLint
-
-newUniform :: CString -> Program -> IO Uniform
-newUniform name prog = fromIntegral
-    `fmap` glGetUniformLocation prog name
 
 --------------------------------------------------------------------------------
 --  Models
 
 {-# INLINE loadModel #-}
-loadModel :: FilePath -> FilePath -> FilePath -> IO GLmodel
-loadModel model vshad fshad = do
+loadModel :: FilePath -> FilePath -> FilePath 
+          -> (Program -> IO (Uniforms s))
+          -> IO (GLmodel s)
+loadModel model vshad fshad mk = do
     mesh <- loadMesh model
-    meshToGL mesh vshad fshad
+    meshToGL mesh mk vshad fshad
 
 vertexAttribute, uvAttribute, normalAttribute :: GLuint
 vertexAttribute = 0
 uvAttribute     = 1
 normalAttribute = 2
 
-data GLmodel = GLmodel
+data GLmodel s = GLmodel
     { vertArray :: !GLuint
     , normArray :: !GLuint
     , uvArray   :: !GLuint
     , ixArray   :: !GLuint
     , program   :: !Program
-    , mvpU      :: !Uniform
+    , uniforms  :: !(Uniforms s)
     , arrSize   :: !GLsizei
     }
 
-meshToGL :: Mesh -> FilePath -> FilePath -> IO GLmodel
-meshToGL (Mesh v n u f) vshad fshad = newGLmodel (S.map realToFrac v) (S.map realToFrac n) (S.map realToFrac u) f vshad fshad
+{-# INLINE meshToGL #-}
+meshToGL :: Mesh -> (Program -> IO (Uniforms s)) -> FilePath -> FilePath -> IO (GLmodel s)
+meshToGL (Mesh v n u f) = newGLmodel v' n' u' f
+  where
+    v' = S.map realToFrac v
+    n' = S.map realToFrac n
+    u' = S.map realToFrac u
 
 -- | 'newGLmodel' vertices normals uvs indices vertexShader fragmentShader
 {-# INLINE newGLmodel #-}
@@ -66,20 +60,22 @@ newGLmodel :: S.Vector GLfloat
            -> S.Vector GLfloat 
            -> S.Vector GLfloat 
            -> S.Vector GLushort 
-           -> FilePath -> FilePath -> IO GLmodel
-newGLmodel !vert !norm !uv !elems !vshad !fshad = do
+           -> (Program -> IO (Uniforms s))
+           -> FilePath -> FilePath -> IO (GLmodel s)
+newGLmodel !vert !norm !uv !elems !mkUniforms !vshad !fshad = do
     program       <- makeProgram vshad fshad
-    mvpU          <- newUniform "mvp" program
+    uniforms      <- mkUniforms program
     vertArray     <- staticArray vert
     normArray     <- staticArray norm
     uvArray       <- staticArray uv
     ixArray       <- staticElementArray elems
     return GLmodel{ arrSize = fromIntegral (S.length elems), .. }
 
-drawModel :: GLmodel -> Matrix Float -> IO ()
-drawModel GLmodel{..} !mvp = do
+{-# INLINE drawModel #-}
+drawModel :: Upload s => GLmodel s -> s
+drawModel GLmodel{..} = uploadUniforms uniforms $ \ glUniforms -> do
     glUseProgram program
-    glUniformMatrix4fv mvpU 1 (fromIntegral gl_TRUE) . castPtr `appMatrix` mvp
+    glUniforms
 
     -- Vertice attribute buffer
     glEnableVertexAttribArray vertexAttribute
