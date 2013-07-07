@@ -3,6 +3,7 @@ module Util where
 import Foreign.C
 import Foreign hiding (unsafePerformIO)
 import Data.String
+import Data.IORef
 import GHC.Base
 import GHC.Ptr
 import Control.Monad
@@ -44,11 +45,11 @@ orFail x err = do
     when b (error err)
 infixl 0 `orFail`
 
-while :: IO Bool -> IO a -> IO ()
+while :: IORef Bool -> IO a -> IO ()
 while predicate block = loop
   where
     loop = do
-        ok <- predicate
+        ok <- readIORef predicate
         when ok (block >> loop)
 
 {-# INLINE for #-}
