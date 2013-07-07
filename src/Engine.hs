@@ -2,33 +2,23 @@
 {-# OPTIONS_GHC -funbox-strict-fields #-}
 module Engine where
 import qualified Data.Vector.Storable as S
-import qualified Data.Vector as V
-import qualified Data.Vector.Mutable as VM
-import qualified Graphics.UI.GLFW as GLFW
 import Graphics.Rendering.OpenGL.Raw
-import Graphics.Rendering.GLU.Raw
-import Control.Applicative
-import Control.Monad
-import Data.IORef
 import Foreign.C
 import Foreign
 import qualified Data.ByteString as B
-import Data.Bits
 
 import Data.Packed.Foreign
-import Data.Packed.Development
 
 import Util
-import qualified OBJ
-import qualified Model as M
-import Physics
-import Linear
-import Numeric.LinearAlgebra
+import Model
+import Geometry
 
-foreign import ccall "test.c" printMat44 :: Ptr GLfloat -> IO ()
-
-clear ::IO ()
+clear :: IO ()
 clear = glClear (gl_COLOR_BUFFER_BIT .|. gl_DEPTH_BUFFER_BIT)
+
+frameInit :: IO ()
+frameInit = do
+    glPolygonMode gl_FRONT_AND_BACK gl_LINE
     
 --------------------------------------------------------------------------------
 --  Vectors
@@ -49,36 +39,13 @@ newUniform name prog = fromIntegral
 {-# INLINE loadModel #-}
 loadModel :: FilePath -> FilePath -> FilePath -> IO GLmodel
 loadModel model vshad fshad = do
-    Right obj <- OBJ.readObj model
-    fromModel (M.buildFromObj obj) vshad fshad
+    mesh <- loadMesh model
+    meshToGL mesh vshad fshad
 
 vertexAttribute, uvAttribute, normalAttribute :: GLuint
 vertexAttribute = 0
 uvAttribute     = 1
 normalAttribute = 2
-
-{-# INLINE fromModel #-}
-fromModel :: M.Model -> FilePath -> FilePath -> IO GLmodel
-fromModel (M.Model v n u f) = 
-    newGLmodel (convertBy v3ToGLfloats v)
-               (convertBy v3ToGLfloats n)
-               (convertBy v2ToGLfloats u)
-               (convertBy faceToGLushort f)
-  where
-    convertBy :: S.Storable b => (a -> V.Vector b) -> V.Vector a -> S.Vector b
-    convertBy through xs = V.convert (V.concatMap through xs)
-
-    v3ToGLfloats :: V3 GLfloat -> V.Vector GLfloat
-    v3ToGLfloats   (V3 x y z) = V.map realToFrac (V.fromList [x,y,z])
-
-    v2ToGLfloats :: V2 GLfloat -> V.Vector GLfloat
-    v2ToGLfloats   (V2 x y) = V.map realToFrac (V.fromList [x,y])
-
-    faceToGLushort :: M.Face -> V.Vector GLushort
-    faceToGLushort (M.Verts i j k)                         = V.map fromIntegral (V.fromList [i,j,k])
-    faceToGLushort (M.VertTex (i,_) (j,_) (k,_))           = V.map fromIntegral (V.fromList [i,j,k])
-    faceToGLushort (M.VertNorm (i,_) (j,_) (k,_))          = V.map fromIntegral (V.fromList [i,j,k])
-    faceToGLushort (M.VertTexNorm (i,_,_) (j,_,_) (k,_,_)) = V.map fromIntegral (V.fromList [i,j,k])
 
 data GLmodel = GLmodel
     { vertArray :: !GLuint
@@ -90,6 +57,8 @@ data GLmodel = GLmodel
     , arrSize   :: !GLsizei
     }
 
+meshToGL :: Mesh -> FilePath -> FilePath -> IO GLmodel
+meshToGL (Mesh v n u f) vshad fshad = newGLmodel (S.map realToFrac v) (S.map realToFrac n) (S.map realToFrac u) f vshad fshad
 
 -- | 'newGLmodel' vertices normals uvs indices vertexShader fragmentShader
 {-# INLINE newGLmodel #-}
@@ -105,19 +74,12 @@ newGLmodel !vert !norm !uv !elems !vshad !fshad = do
     normArray     <- staticArray norm
     uvArray       <- staticArray uv
     ixArray       <- staticElementArray elems
-    return GLmodel{ arrSize = 2*fromIntegral (S.length vert), .. }
+    return GLmodel{ arrSize = fromIntegral (S.length elems), .. }
 
 drawModel :: GLmodel -> Matrix Float -> IO ()
 drawModel GLmodel{..} !mvp = do
     glUseProgram program
-    glUniformMatrix4fv mvpU 1 1 . castPtr `appMatrix` mvp
-
-{-
-    n <- newArray (replicate 16 0)
-    glGetUniformfv program mvpU n
-    printMat44 n
-    free n
--}
+    glUniformMatrix4fv mvpU 1 (fromIntegral gl_TRUE) . castPtr `appMatrix` mvp
 
     -- Vertice attribute buffer
     glEnableVertexAttribArray vertexAttribute
@@ -154,8 +116,8 @@ drawModel GLmodel{..} !mvp = do
 
     -- Vertex indices
     glBindBuffer gl_ELEMENT_ARRAY_BUFFER ixArray
-
     glDrawElements gl_TRIANGLES arrSize gl_UNSIGNED_SHORT 0
+
     -- Clean up
     glDisableVertexAttribArray vertexAttribute
     glDisableVertexAttribArray uvAttribute
