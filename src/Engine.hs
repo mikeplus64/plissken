@@ -48,11 +48,9 @@ data GLmodel s = GLmodel
 
 {-# INLINE meshToGL #-}
 meshToGL :: Mesh -> (Program -> IO (Uniforms s)) -> FilePath -> FilePath -> IO (GLmodel s)
-meshToGL (Mesh v n u f) = newGLmodel v' n' u' f
-  where
-    v' = S.map realToFrac v
-    n' = S.map realToFrac n
-    u' = S.map realToFrac u
+meshToGL (Mesh v n u f) = newGLmodel
+    (S.map realToFrac v) (S.map realToFrac n) (S.map realToFrac u)
+    f
 
 -- | 'newGLmodel' vertices normals uvs indices vertexShader fragmentShader
 {-# INLINE newGLmodel #-}
@@ -76,7 +74,6 @@ drawModel :: Upload s => GLmodel s -> s
 drawModel GLmodel{..} = uploadUniforms uniforms $ \ glUniforms -> do
     glUseProgram program
     glUniforms
-
     -- Vertice attribute buffer
     glEnableVertexAttribArray vertexAttribute
     glBindBuffer gl_ARRAY_BUFFER vertArray
@@ -87,7 +84,6 @@ drawModel GLmodel{..} = uploadUniforms uniforms $ \ glUniforms -> do
         0
         0 
         nullPtr
-
     -- UV attribute buffer
     glEnableVertexAttribArray uvAttribute
     glBindBuffer gl_ARRAY_BUFFER uvArray
@@ -98,7 +94,6 @@ drawModel GLmodel{..} = uploadUniforms uniforms $ \ glUniforms -> do
         0
         0
         nullPtr
-
     -- Normal attribute buffer
     glEnableVertexAttribArray normalAttribute
     glBindBuffer gl_ARRAY_BUFFER normArray
@@ -109,16 +104,15 @@ drawModel GLmodel{..} = uploadUniforms uniforms $ \ glUniforms -> do
         0
         0
         nullPtr
-
     -- Vertex indices
     glBindBuffer gl_ELEMENT_ARRAY_BUFFER ixArray
     glDrawElements gl_TRIANGLES arrSize gl_UNSIGNED_SHORT 0
-
     -- Clean up
     glDisableVertexAttribArray vertexAttribute
     glDisableVertexAttribArray uvAttribute
     glDisableVertexAttribArray normalAttribute
     glUseProgram 0
+
 
 --------------------------------------------------------------------------------
 --  Shaders
