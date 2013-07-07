@@ -44,7 +44,7 @@ instance Upload xs => Upload (M -> xs) where
     {-# INLINE uploadUniforms' #-}
     uploadUniforms' acc (UMat4 loc xs) f m4
       = uploadUniforms'
-            (do acc; glUniformMatrix4fv loc 1 (fromIntegral gl_TRUE) . castPtr `appMatrixRaw` m4)
+            (do acc; glUniformMatrix4fv loc 1 (fromIntegral gl_FALSE) . castPtr `appMatrixRaw` m4)
             xs
             f
 
