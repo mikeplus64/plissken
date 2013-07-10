@@ -1,21 +1,16 @@
-{-# LANGUAGE ScopedTypeVariables, OverloadedStrings, RecordWildCards, BangPatterns, NamedFieldPuns, ForeignFunctionInterface #-}
-{-# LANGUAGE GADTs, TypeFamilies, KindSignatures, DataKinds, PolyKinds, TypeOperators, EmptyDataDecls #-}
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# OPTIONS_GHC -funbox-strict-fields #-}
 module Engine where
 import qualified Data.Vector.Storable as S
 import Graphics.Rendering.OpenGL.Raw
-import Foreign.C
 import Foreign
-import qualified Data.ByteString as B
-import Control.Monad
 
-import Data.Packed.Foreign
-import GHC.TypeLits
-
-import Util
-import Model
-import Geometry
 import Uniform
+import Shader
+import Model
+import Util
 
 clear :: IO ()
 clear = glClear (gl_COLOR_BUFFER_BIT .|. gl_DEPTH_BUFFER_BIT)
@@ -23,46 +18,37 @@ clear = glClear (gl_COLOR_BUFFER_BIT .|. gl_DEPTH_BUFFER_BIT)
 --------------------------------------------------------------------------------
 --  Models
 
-{-# INLINE loadModel #-}
-loadModel :: FilePath -> FilePath -> FilePath 
-          -> (Program -> IO (Uniforms s))
-          -> IO (GLmodel s)
-loadModel model vshad fshad mk = do
+loadModel :: FilePath
+          -> IO GLmodel
+loadModel model = do
     mesh <- loadMesh model
-    meshToGL mesh mk vshad fshad
+    meshToGL mesh
 
 vertexAttribute, uvAttribute, normalAttribute :: GLuint
 vertexAttribute = 0
 uvAttribute     = 1
 normalAttribute = 2
 
-data GLmodel s = GLmodel
+data GLmodel = GLmodel
     { vertArray :: !GLuint
     , normArray :: !GLuint
     , uvArray   :: !GLuint
     , ixArray   :: !GLuint
-    , program   :: !Program
-    , uniforms  :: !(Uniforms s)
     , arrSize   :: !GLsizei
     }
 
-{-# INLINE meshToGL #-}
-meshToGL :: Mesh -> (Program -> IO (Uniforms s)) -> FilePath -> FilePath -> IO (GLmodel s)
+meshToGL :: Mesh -> IO GLmodel
 meshToGL (Mesh v n u f) = newGLmodel
     (S.map realToFrac v) (S.map realToFrac n) (S.map realToFrac u)
     f
 
 -- | 'newGLmodel' vertices normals uvs indices vertexShader fragmentShader
-{-# INLINE newGLmodel #-}
 newGLmodel :: S.Vector GLfloat 
            -> S.Vector GLfloat 
            -> S.Vector GLfloat 
            -> S.Vector GLushort 
-           -> (Program -> IO (Uniforms s))
-           -> FilePath -> FilePath -> IO (GLmodel s)
-newGLmodel !vert !norm !uv !elems !mkUniforms !vshad !fshad = do
-    program       <- makeProgram vshad fshad
-    uniforms      <- mkUniforms program
+           -> IO GLmodel
+newGLmodel !vert !norm !uv !elems = do
     vertArray     <- staticArray vert
     normArray     <- staticArray norm
     uvArray       <- staticArray uv
@@ -70,10 +56,8 @@ newGLmodel !vert !norm !uv !elems !mkUniforms !vshad !fshad = do
     return GLmodel{ arrSize = fromIntegral (S.length elems), .. }
 
 {-# INLINE drawModel #-}
-drawModel :: Upload s => GLmodel s -> s
-drawModel GLmodel{..} = uploadUniforms uniforms $ \ glUniforms -> do
-    glUseProgram program
-    glUniforms
+drawModel :: Uploadable s r => GLmodel -> Shaders s -> r
+drawModel GLmodel{..} shaders = runShaders shaders $ do
     -- Vertice attribute buffer
     glEnableVertexAttribArray vertexAttribute
     glBindBuffer gl_ARRAY_BUFFER vertArray
@@ -113,62 +97,6 @@ drawModel GLmodel{..} = uploadUniforms uniforms $ \ glUniforms -> do
     glDisableVertexAttribArray normalAttribute
     glUseProgram 0
 
-
---------------------------------------------------------------------------------
---  Shaders
---
-
-
--- | Convenient aliases
-type Shader  = GLuint
-type Program = GLuint
-type ShaderType = GLenum
-
--- | Load a shader from a file
-loadShader :: FilePath -> ShaderType -> IO Shader
-loadShader srcPath shad = do
-    shader <- glCreateShader shad
-    srcBS  <- B.readFile srcPath
-    srcBS `B.useAsCString` 
-        \c -> c `with` 
-        \s -> glShaderSource shader 1 s nullPtr
-    glCompileShader shader
-    return shader
-
--- | From a vertex and fragment shader, make a program
-makeProgram :: FilePath -> FilePath -> IO Program
-makeProgram v f = do
-    vert <- loadShader v gl_VERTEX_SHADER
-    frag <- loadShader f gl_FRAGMENT_SHADER
-    prog <- linkProgram vert frag
-    glLinkProgram prog
-    printLog prog gl_COMPILE_STATUS glGetProgramiv glGetProgramInfoLog
-    -- printLog prog gl_LINK_STATUS glGetProgramiv glGetProgramInfoLog
-    glDeleteShader vert
-    glDeleteShader frag
-    return prog
-
--- | Link the vertex and fragment shaders together
-linkProgram :: Shader -> Shader -> IO Program
-linkProgram vert frag = do
-    prog <- glCreateProgram
-    glAttachShader prog vert
-    glAttachShader prog frag
-    return prog
-
--- | Print the OpenGL compile log
-printLog 
-    :: GLuint 
-    -> GLenum 
-    -> (GLuint -> GLenum -> Ptr GLint -> IO ()) 
-    -> (GLuint -> GLsizei -> Ptr GLsizei -> Ptr GLchar -> IO ()) 
-    -> IO ()
-printLog gid from getLog getInfoLog = do
-    _result <- alloca' (getLog gid from)
-    len     <- alloca' (getLog gid gl_INFO_LOG_LENGTH)
-    log'    <- mallocArray (fromIntegral len)
-    getInfoLog gid len nullPtr log'
-    puts log'
 
 --------------------------------------------------------------------------------
 --  Buffer creation

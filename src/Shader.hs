@@ -4,32 +4,42 @@ import Graphics.Rendering.OpenGL.Raw
 
 import qualified Data.ByteString as B
 
-import Foreign.C
 import Foreign
 
-import Geometry
 import Uniform
 import Util
 
-data Shader s = Shader
+data Shaders s = Shaders
     { program  :: !GLuint
     , uniforms :: !(Uniforms s)
     }
 
+{-# INLINE runShaders #-}
+runShaders :: Uploadable s r => Shaders s -> IO () -> r
+runShaders (Shaders prog us) f = uploadUniforms us $ \ loadUniforms -> do
+    glUseProgram prog
+    loadUniforms
+    f
+
+{-# INLINE makeShaders #-}
+makeShaders :: GetUniforms s 
+            => FilePath -> FilePath 
+            -> (Needs (IO ()) -> Needs s) 
+            -> IO (Shaders s)
+makeShaders v f n = do
+    prog <- makeProgram v f
+    us   <- getUniforms (n OK) prog
+    return (Shaders prog us)
 
 --------------------------------------------------------------------------------
---  Raw OpenGL shader loading/
-
-loadShaderFile :: FilePath -> GLenum -> IO GLuint
-loadShaderFile src shad = do
-    srcBS <- B.readFile src
-    loadShader srcBS shad
+--  Raw OpenGL shader loading
 
 -- | Load a shader from a string
-loadShader :: B.ByteString -> GLenum -> IO GLuint
-loadShader src shad = do
+loadShader' :: FilePath -> GLenum -> IO GLuint
+loadShader' src shad = do
     shader <- glCreateShader shad
-    src `B.useAsCString` 
+    srcBS  <- B.readFile src
+    srcBS `B.useAsCString` 
         \c -> c `with` 
         \s -> glShaderSource shader 1 s nullPtr
     glCompileShader shader
@@ -38,12 +48,11 @@ loadShader src shad = do
 -- | From a vertex and fragment shader, make a program
 makeProgram :: FilePath -> FilePath -> IO GLuint
 makeProgram v f = do
-    vert <- loadShader v gl_VERTEX_SHADER
-    frag <- loadShader f gl_FRAGMENT_SHADER
+    vert <- loadShader' v gl_VERTEX_SHADER
+    frag <- loadShader' f gl_FRAGMENT_SHADER
     prog <- linkProgram vert frag
     glLinkProgram prog
     printLog prog gl_COMPILE_STATUS glGetProgramiv glGetProgramInfoLog
-    -- printLog prog gl_LINK_STATUS glGetProgramiv glGetProgramInfoLog
     glDeleteShader vert
     glDeleteShader frag
     return prog

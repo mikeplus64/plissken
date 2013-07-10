@@ -75,7 +75,6 @@ instance GetUniforms s => GetUniforms (t -> s) where
 
 class Uploadable s r | s -> r where
     uploadUniforms' :: IO () -> Uniforms s -> (IO () -> IO ()) -> r
-
 instance Uploadable (IO ()) (IO ()) where
     {-# INLINE uploadUniforms' #-}
     uploadUniforms' acc _ f = f acc

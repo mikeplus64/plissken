@@ -45,6 +45,7 @@ orFail x err = do
     when b (error err)
 infixl 0 `orFail`
 
+{-# INLINE while #-}
 while :: IORef Bool -> IO a -> IO ()
 while predicate block = loop
   where
@@ -52,11 +53,20 @@ while predicate block = loop
         ok <- readIORef predicate
         when ok (block >> loop)
 
-{-# INLINE for #-}
-for :: (Ord b, Num b) => b -> b -> (b -> IO a) -> IO ()
-for lim z f = go 0
+{-# INLINE while' #-}
+while' :: a -> IORef Bool -> (a -> IO a) -> IO ()
+while' z predicate f = loop z
   where
-    go i | i < lim   = f i >> go (i+z)
+    loop s = do
+        ok <- readIORef predicate
+        when ok
+          (f s >>= loop)
+
+{-# INLINE for #-}
+for :: (Ord b, Num b) => b -> b -> b -> (b -> IO a) -> IO ()
+for z s lim f = go z
+  where
+    go i | i < lim   = f i >> go (i+s)
          | otherwise = return ()
 
 {-# NOINLINE unsafePackCString #-}

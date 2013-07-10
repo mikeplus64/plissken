@@ -13,17 +13,22 @@ import Graphics.UI.GLFW (Key(..), MouseButton(..))
 import Graphics.Rendering.OpenGL.Raw
 
 import Numeric.LinearAlgebra
-import Control.Lens
 
-import System.Environment
-import System.Posix.Signals
+import Data.Vector.Storable ((//), (!))
+import qualified Data.Foldable as F
+import Data.Time
+
+import Control.Lens hiding ((%=))
 
 import OBJ
 import Menu
 import Engine
-import Util
+import Util hiding ((%=))
 import Geometry
 import Uniform
+import Shader
+import Game
+import Paths
 
 mainMenu :: IORef Bool -> Menu
 mainMenu open = mkMenu
@@ -44,6 +49,14 @@ quit open = do
     writeIORef open False
     return True
 
+(%=) :: IORef a -> (a -> a) -> IO ()
+(%=) = modifyIORef'
+
+view', proj, viewProj :: M
+viewProj = mXm proj view'
+view'    = lookAt (vec3 10 10 10) (vec3 0 (-0.25) 0) (vec3 0 1 0)
+proj     = perspective 30 1 0.001 100
+
 main :: IO ()
 main = do
     open <- newIORef True
@@ -52,23 +65,14 @@ main = do
         { GLFW.displayOptions_windowIsResizable = False
         , GLFW.displayOptions_numFsaaSamples    = Just 8
         }
-    GLFW.enableKeyRepeat
     GLFW.enableAutoPoll
-    GLFW.setWindowCloseCallback (quit open)
     GLFW.setWindowTitle "PLISSKEN"
     GLFW.setWindowSizeCallback $ \_ _ -> do
-        glViewport 0 0 512 512
-        GLFW.setWindowDimensions 512 512
-    GLFW.setWindowDimensions 512 512
+        glViewport 0 0 1024 1024
+        GLFW.setWindowDimensions 1024 1024
+    GLFW.setWindowCloseCallback (quit open)
+    GLFW.setWindowDimensions 1024 1024
 
-    bevelCube <- loadModel "data/models/bevelcube.obj" "data/models/basic.vert" "data/models/block.frag" $ \prog -> do
-        mvp     <- newUMat4 prog "MVP"
-        m       <- newUMat4 prog "M"
-        v       <- newUMat4 prog "V"
-        p       <- newUMat4 prog "P"
-        diffuse <- newUVec4 prog "diffuse"
-        return . UMat4 mvp . UMat4 m . UMat4 v . UMat4 p
-               . UVec4 diffuse $ Uz
 
     mainmenu <- newMenu (mainMenu open) $ \ !sel !down !item !dyn -> do
         putStr (show sel)
@@ -77,97 +81,143 @@ main = do
         T.putStr " -> "
         print dyn
 
-    camera'     <- newIORef (vec3 2 2 2)
-    -- target'     <- newIORef (vec3 0 0 0)
-    up'         <- newIORef (vec3 0 1 0)
     model'      <- newIORef (vec3 0 0 0)
-    modelm'     <- newIORef (translation (vec3 0 0 0))
-    view'       <- newIORef (lookAt (- vec3 2 2 2) (vec3 0 0 0) (vec3 0 1 0))
-    projection' <- newIORef (perspective 90 1 0.001 100)
-    mvp         <- newIORef 0
+    light'      <- newIORef (vec3 4 2 2)
 
-    let target'    = model'
-        updateView = do
-            camera <- readIORef camera'
-            target <- readIORef target'
-            up     <- readIORef up'
-            writeIORef view' $! lookAt camera target up
+    game' <- newGame $ newStage $
+        [ (vec3 x y z, Brick)
+        | x <- [0,19]
+        , y <- [0,19]
+        , z <- [0,19]
+        ] ++
+        [ (vec3 13 13 10, Good Grape)
+        , (vec3 16 12 13, Good Grape)
+        , (vec3 5  6  8, Good Grape)
+        , (vec3 5  2 1, Good Grape)
+        , (vec3 3  4  5, Good Grape)
+        , (vec3 14 15 2, Bad Orange)
+        ]
 
-        updateMVP  = do
-            model  <- readIORef model'
-            view   <- readIORef view'
-            proj   <- readIORef projection'
-            let !m = translation model
-            writeIORef modelm' m
-            writeIORef mvp $! proj `mXm` view `mXm` m
-
-    updateView
-    updateMVP
-
-    GLFW.setKeyCallback $ \ key keyPress -> when keyPress $ do
-        case key of 
+    GLFW.setKeyCallback $ \ key keyPress -> when keyPress $
+        case key of
             CharKey c -> case c of
-                'I' -> model' `modifyIORef'` (+ vec3 0 0.1 0)
-                'K' -> model' `modifyIORef'` (+ vec3 0 (-0.1) 0)
-                'L' -> model' `modifyIORef'` (+ vec3 0.1 0 0)
-                'J' -> model' `modifyIORef'` (+ vec3 (-0.1) 0 0)
-                'U' -> model' `modifyIORef'` (+ vec3 0 0 (-0.1))
-                'O' -> model' `modifyIORef'` (+ vec3 0 0 0.1)
+                'I' -> model' %= (+ vec3 0 0.1 0)
+                'K' -> model' %= (+ vec3 0 (-0.1) 0)
+                'L' -> model' %= (+ vec3 0.1 0 0)
+                'J' -> model' %= (+ vec3 (-0.1) 0 0)
+                'U' -> model' %= (+ vec3 0 0 (-0.1))
+                'O' -> model' %= (+ vec3 0 0 0.1)
+
+                'D' -> update game' (turnFlip toX)
+                'A' -> update game' (turnFlip (-toX))
+                'W' -> update game' (turnFlip toY)
+                'S' -> update game' (turnFlip (-toY))
+                'Q' -> update game' (turnFlip toZ)
+                'E' -> update game' (turnFlip (-toZ))
+
                 _   -> return ()
             _       -> return ()
-        updateView
-        updateMVP
 
-    GLFW.setMousePositionCallback $ \ mx my -> do
-        return ()
+    GLFW.setMousePositionCallback $ \ _ _ -> return ()
 
+    glClearColor 0 0 0 1
 
-    {-
-        when keyPress $ print () >> case key of
-            KeyUp        -> modifyIORef' centre' (_z +~ 0.1)
-            KeyDown      -> modifyIORef' centre' (_z -~ 0.1)
-            KeyRight     -> modifyIORef' centre' (_x +~ 0.1)
-            KeyLeft      -> modifyIORef' centre' (_x -~ 0.1)
-            KeySpace     -> modifyIORef' centre' (_y +~ 0.1)
-            CharKey 'c'  -> modifyIORef' centre' (_y -~ 0.1)
-            _            -> return ()
-        when keyPress $ whenOpen men $ case key of
-            KeyUp        -> sendMenu SelectUp
-            KeyDown      -> sendMenu SelectDown
-            KeyLeft      -> sendMenu BackMenu
-            KeyRight     -> sendMenu Enter
-            KeyEnter     -> sendMenu Enter
-            CharKey c    -> sendMenu (Insert c)
-            KeyBackspace -> sendMenu Empty
-            _            -> const (return ()
-            )
-    -}
+    shroom      <- loadModel (Paths.model "shroom.obj")
+    backcube    <- loadModel (Paths.model "invcube.obj")
+    block       <- loadModel (Paths.model "block.obj")
 
-    glClearColor 0.1 0.1 0.1 1
+    smoothBlock <- makeShaders (Paths.shader "smooth.vert") (Paths.shader "smooth.frag")
+        $ umat4 "VP" 
+        . umat4 "V"
+        . umat4 "P"
+        . ufloat "scale"
+        . uvec3 "w_offset"
+        . uvec3 "w_light_pos"
+        . uvec4 "light_col"
+        . uvec4 "diffuse"
+
+    background <- makeShaders (Paths.shader "flat.vert") (Paths.shader "flat.frag")
+        $ umat4 "VP" 
+        . umat4 "V"
+        . umat4 "P"
+        . ufloat "scale"
+        . uvec3 "w_offset"
+        . uvec3 "w_light_pos"
+        . uvec4 "light_col"
+        . uvec4 "diffuse"
+
+    putStrLn "loading models"
+
+    i' <- newIORef 0
+    start <- getCurrentTime
+    logic <- forkIO $ while' start open $ \lastUpdate -> do
+        threadDelay 50000 -- pause for 0.05 seconds
+        now <- getCurrentTime
+        if diffUTCTime now lastUpdate >= 0.2
+          then do
+            tick game'
+            getCurrentTime
+          else return lastUpdate
+
     glEnable gl_DEPTH_TEST
     glDepthFunc gl_LESS
 
+    {-
+    glEnable gl_CULL_FACE
+    glCullFace gl_BACK
+
     glEnable gl_SMOOTH
     glEnable gl_BLEND
-    glBlendFunc gl_SRC_ALPHA gl_ONE_MINUS_SRC_ALPHA
+    glBlendFunc gl_ONE gl_ONE_MINUS_SRC_ALPHA
+    -}
 
-    while open (do
+
+    while open $ do
         clear 
 
-        mvp' <- readIORef mvp
-        m'   <- readIORef modelm'
-        v'   <- readIORef view'
-        p'   <- readIORef projection'
+        model <- readIORef model'
+        light <- readIORef light'
+        i     <- readIORef i'
+        game  <- readIORef game'
 
-        drawModel bevelCube mvp' m' v' p'
-            (vec4 0.1 0.1 0.2 1)
+        let globalLight = vec4 0.95 0.8 0.7 400
+            drawSmooth :: GLmodel -> V -> V -> IO ()
+            drawSmooth m pos diffuse  =
+              drawModel m smoothBlock
+                viewProj
+                view'
+                proj
+                0.09
+                (0.2 `scale` pos)
+                light
+                globalLight
+                diffuse
 
+        F.for_ (game^?snake.body._head) $ \ (Ent pos _) ->
+            drawSmooth block pos (vec4 0.3 1 0.3 1)
+
+        F.for_ (game^.snake.body._tail) $ \ (Ent pos _) ->
+            drawSmooth block pos (vec4 0.7 0.9 0.8 1)
+
+        forStage (_stage game) $ \ pos b -> case b of
+          Brick  -> drawSmooth block pos (vec4 0.6 0.5 0.5 1)
+          Wood   -> drawSmooth block pos (vec4 0.1174 0.0745 0.04705 1)
+          Water  -> drawSmooth block pos (vec4 0.2 1 0.4 0.4)
+          Good _ -> drawSmooth shroom pos (vec4 0.2 0.2 1 1)
+          Bad _  -> drawSmooth shroom pos (vec4 1 0.2 0.2 1)
+
+        writeIORef light' $! vec3 (1.5 * sin (0.01 * i)) 6 (1.5 * cos (0.01 * i))
+
+        i' %= succ
+        
         -- Through experimentation I found GLFW.swapBuffers would take almost 
         -- exactly 1.666e-2 seconds to complete. This is 1/60 seconds! 
         -- ie, glfw is automatically capping the framerate to 60fps.
         -- To remove the cap use GLFW.setWindowBufferSwapInterval 0. (somewhat
         -- dangerous, as it will stress your GPU and CPU heavily)
-        GLFW.swapBuffers)
+        GLFW.swapBuffers
 
+    writeIORef open False
+    killThread logic
     GLFW.terminate
 

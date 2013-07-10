@@ -22,7 +22,7 @@ data ObjCommand
     | UseMTL !ByteString
     | Object !ByteString
     | Group !ByteString
-    | S !Bool
+    | S !I
     | V !F !F !F
     | VT !F !F
     | VN !F !F !F
@@ -103,11 +103,8 @@ parseVertNorm = do
 parseSmooth :: Parser ObjCommand
 parseSmooth = do
     string "s "
-    onOrOff <- string "on" 
-           <|> string "1"
-           <|> string "off"
-           <|> string "0"
-    return (S (onOrOff == "on" || onOrOff == "1"))
+    smoothGroup <- fromInteger `fmap` decimal
+    return (S smoothGroup)
 
 parseGroup :: Parser ObjCommand
 parseGroup = do

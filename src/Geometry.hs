@@ -34,11 +34,26 @@ type V4 = V
 type M = Matrix F
 
 vec2 :: F -> F -> V
-vec2 x y = fromList [x,y]
+vec2 x y = runSTVector $ do
+    v <- newUndefinedVector 2
+    unsafeWriteVector v 0 x
+    unsafeWriteVector v 1 y
+    return v
 vec3 :: F -> F -> F -> V
-vec3 x y z = fromList [x,y,z]
+vec3 x y z = runSTVector $ do
+    v <- newUndefinedVector 3
+    unsafeWriteVector v 0 x
+    unsafeWriteVector v 1 y
+    unsafeWriteVector v 2 z
+    return v
 vec4 :: F -> F -> F -> F -> V
-vec4 x y z w = fromList [x,y,z,w]
+vec4 x y z w = runSTVector $ do
+    v <- newUndefinedVector 4
+    unsafeWriteVector v 0 x
+    unsafeWriteVector v 1 y
+    unsafeWriteVector v 2 z
+    unsafeWriteVector v 3 w
+    return v
 
 normalize :: V -> V
 normalize v = cmap (/ norm2 v) v
