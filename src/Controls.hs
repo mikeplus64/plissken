@@ -1,45 +1,27 @@
-{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE NamedFieldPuns, StandaloneDeriving, LambdaCase, OverloadedStrings #-}
 {-# OPTIONS_GHC -funbox-strict-fields #-}
 module Controls where
 import qualified Data.Map.Strict     as M
-import qualified Data.HashMap.Strict as H
-
+import qualified Data.Foldable       as F
 import qualified Graphics.UI.GLFW as GLFW
-import Graphics.UI.GLFW (Key(..), MouseButton(..))
+import Graphics.UI.GLFW (Key(..))
 
-
-
+import Control.Lens
 import Control.Concurrent
+import Control.Monad.Writer.Strict
 import Control.Applicative
 import Data.IORef
 
 import Data.Int
-import Data.Text (Text, append)
+import qualified Data.Text as T
+import Data.Text (Text, append, unpack)
+import Data.Maybe (fromMaybe)
 
 import Text.Read (readMaybe)
 
 import Game
 import Menu
-
-buildScheme :: Config -> Config -> Maybe Scheme
-buildScheme scheme defs = do
-    return undefined
-  where
-    contKey :: Text -> Key
-    contKey c = Key ["controls",c] TT
-
-    lookupKeyEvent :: Text -> Maybe (Key, Event)
-    lookupKeyEvent m' = do
-        k' <- M.lookup (contKey m') scheme <|> M.lookup (contKey m') defs
-        k  <- readMaybe k'
-        m  <- readMaybe m'
-        return (k, m)
-
-
-data Scheme = Scheme
-    { _schemeName    :: !String
-    , _controls      :: !(Map Key Event)
-    }
+import Save
 
 data Event
     = ToggleMenu
@@ -55,35 +37,50 @@ data Event
     | AbsX !Int8
     | AbsY !Int8
     | AbsZ !Int8
-  deriving (Show,Read,Eq,Ord,Enum)
+  deriving (Show,Read,Eq,Ord)
 
-{-
-type MouseWheel = Int
+type Scheme = M.Map GLFW.Key Event
 
-data MB = Down !MouseButton 
-        | Up !MouseButton
+defaultScheme :: Scheme
+defaultScheme = execWriter $ do
+    CharKey 'S' `maps` AbsY (-1)
+    CharKey 'W' `maps` AbsY 1
+    CharKey 'A' `maps` AbsX (-1)
+    CharKey 'D' `maps` AbsX 1
+    CharKey 'E' `maps` AbsZ (-1)
+    CharKey 'Q' `maps` AbsZ 1
+  where
+    maps k x = tell (M.singleton k x)
 
-data Mouse = Mouse
-    { mousePos    :: !(IORef (Int,Int))
-    , mouseWheel  :: !(IORef MouseWheel)
-    , mouseButton :: !(IORef MB)
-    }
+withControls :: Scheme -> GLFW.Key -> (Event -> IO ()) -> IO ()
+withControls s k = F.for_ (M.lookup k s)
 
-data InputStream = IS
-    { mouse :: !Mouse
-    , keys  :: !(Chan Key)
-    }
+buildScheme :: Config -> Scheme
+buildScheme 
+    = flip M.union defaultScheme
+    . M.map valToEvent
+    . M.mapKeys (\ck -> errorWhenInvalidKey ck (saveKeyToGLFW ck)) 
+    . M.filterWithKey (\k _ -> isControl k)
+  where
+    isControl :: Save.Key -> Bool
+    isControl (Key ["controls",_] TT) = True
+    isControl _                       = False
+    
+    readGLFWkey :: Text -> Maybe GLFW.Key
+    readGLFWkey = readMaybe . T.unpack . T.map (\case '_' -> ' '; a -> a)
+    
+    errorWhenInvalidKey :: Save.Key -> Maybe GLFW.Key -> GLFW.Key
+    errorWhenInvalidKey s Nothing  = error $ "Invalid control "     ++ show s ++ "."
+    errorWhenInvalidKey _ (Just k) = k
 
-mouseButtonCallback :: InputStream -> MouseButton -> Bool -> IO ()
-mouseButtonCallback IS{ mouse = Mouse{mouseButton} } button down
-  = writeIORef mouseButton $! 
-      if down then Down button else Up button
+    valToEvent :: Value -> Event
+    valToEvent (T v)
+        = fromMaybe
+            (error ("Invalid event " ++ show v))
+            (readMaybe (T.unpack v))
 
-mousePositionCallback :: InputStream -> Int -> Int -> IO ()
-mousePositionCallback IS{ mouse = Mouse{mousePos} } x y 
-  = writeIORef mousePos (x, y)
+    valToEvent s     = error $ "Expected a string, got " ++ show s
 
-mouseWheelCallback :: InputStream -> Int -> IO ()
-mouseWheelCallback IS{ mouse = Mouse{mouseWheel} }
-  = writeIORef mouseWheel
--}
+    saveKeyToGLFW :: Save.Key -> Maybe GLFW.Key
+    saveKeyToGLFW (Key ["controls",x] _) = readGLFWkey x
+    saveKeyToGLFW _                      = Nothing
