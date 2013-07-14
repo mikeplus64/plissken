@@ -16,45 +16,48 @@ import Data.Int
 import qualified Data.Text as T
 import Data.Text (Text, append, unpack)
 import Data.Maybe (fromMaybe)
+import Data.Monoid
 
 import Text.Read (readMaybe)
 
 import Game
-import Menu
 import Save
 
 data Event
     = ToggleMenu
-    | SelectionDown
-    | SelectionUp
-    | SelectionHelp
     | Select
     | Back
-    | TurnUp
-    | TurnDown
-    | TurnLeft
-    | TurnRight
+    | MenuUp
+    | MenuDown
+
     | AbsX !Int8
     | AbsY !Int8
     | AbsZ !Int8
+    | Char !Char
   deriving (Show,Read,Eq,Ord)
 
 type Scheme = M.Map GLFW.Key Event
 
 defaultScheme :: Scheme
 defaultScheme = execWriter $ do
-    CharKey 'S' `maps` AbsY (-1)
-    CharKey 'W' `maps` AbsY 1
-    CharKey 'A' `maps` AbsX (-1)
-    CharKey 'D' `maps` AbsX 1
-    CharKey 'E' `maps` AbsZ (-1)
-    CharKey 'Q' `maps` AbsZ 1
-
-    CharKey 'J' `maps` AbsX 0
-    CharKey 'K' `maps` AbsY 0
-    CharKey 'L' `maps` AbsZ 0
+    -- movement controls
+    CharKey 'S'  `maps` AbsY (-1)
+    CharKey 'W'  `maps` AbsY 1
+    CharKey 'A'  `maps` AbsX (-1)
+    CharKey 'D'  `maps` AbsX 1
+    CharKey 'E'  `maps` AbsZ (-1)
+    CharKey 'Q'  `maps` AbsZ 1
+    CharKey 'J'  `maps` AbsX 0
+    CharKey 'K'  `maps` AbsY 0
+    CharKey 'L'  `maps` AbsZ 0
+    -- menu controls
+    KeyEsc       `maps` ToggleMenu
+    KeyEnter     `maps` Select
+    KeyUp        `maps` MenuUp
+    KeyDown      `maps` MenuDown
+    KeyBackspace `maps` Back
   where
-    maps k x = tell (M.singleton k x)
+    maps k x    = tell (M.singleton k x)
 
 {-# INLINE withControls #-}
 withControls :: Applicative m => Scheme -> GLFW.Key -> (Event -> m ()) -> m ()

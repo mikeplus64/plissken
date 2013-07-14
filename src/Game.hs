@@ -18,7 +18,6 @@ import Data.IORef
 
 import System.Random
 import Geometry hiding ((<|), (|>), step)
-import Menu
 
 type Game = StateT GameS Maybe
 
@@ -245,8 +244,7 @@ update :: IORef GameS -> Game a -> IO ()
 update s' f = do
     s <- readIORef s'
     case execStateT f s of
-        Just x -> do
-          writeIORef s' $! x
+        Just x -> writeIORef s' $! x
         _      -> putStrLn "no update?"
 
 tick :: IORef GameS -> IO ()
@@ -270,3 +268,6 @@ linedUp :: V -> V -> Bool
 linedUp x y = atIndex x 0 == atIndex y 0 && atIndex x 1 == atIndex y 1
            || atIndex x 1 == atIndex y 1 && atIndex x 2 == atIndex y 2
            || atIndex x 2 == atIndex y 2 && atIndex x 0 == atIndex y 0
+
+isPaused :: IORef GameS -> IO Bool
+isPaused = fmap _gameIsPaused . readIORef

@@ -4,33 +4,32 @@ module Menu where
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as I
 import qualified Data.Text as T
-import qualified Data.Foldable as F
 import Data.Dynamic
 import Data.Dynamic.Lens
 import Data.Maybe
 import Data.IORef
 import Control.Monad.State.Strict
+import Control.Monad.Writer.Strict
 import Control.Monad.Reader
 import Control.Applicative
-import Control.Concurrent
 import Control.Lens hiding (simple, element)
-import Geometry (V3)
+import Geometry (V, vec4)
+import Controls
 
 data Element
   = Button          { _press       :: !(IO ()) }
   | Field           { _enter       :: !(T.Text -> IO ()) }
   | Toggle          { _toggle      :: !(Bool -> IO ()) }
   | ToMenu          { _targetMenu  :: [T.Text] }
-  | CloseButton
 
 instance Show Element where
-    show (Button _) = "Button"
-    show (Field _)    = "Field"
-    show (Toggle _)       = "Toggle"
-    show (ToMenu t)       = "ToMenu " ++ show t
-    show CloseButton      = "CloseButton"
+    show (Button _)  = "Button"
+    show (Field _)   = "Field"
+    show (Toggle _)  = "Toggle"
+    show (ToMenu t)  = "ToMenu " ++ show t
 
-type Colour = V3
+-- | RGBA colour
+type Colour = V
 
 data Item = Item
     { _label         :: !T.Text
@@ -47,61 +46,57 @@ data MenuS = MenuS
     , _elementData   :: !(M.Map [T.Text] (I.IntMap Dynamic))
     } deriving (Show)
 
-type Menu = M.Map [T.Text] (I.IntMap Item)
-
-type InMenu = StateT MenuS (ReaderT Menu IO)
-
-runMenu :: InMenu a -> MenuS -> Menu -> IO a
-runMenu f = runReaderT . evalStateT f
-
-data MenuEvent
-    = Select !Int
-    | SelectUp
-    | SelectDown
-
-    | Empty
-    | Insert !Char
-
-    | Enter
-    | Exit
-    | Resume
-    | Restart
-    | BackMenu
-    | Kill
-  deriving (Show,Read,Eq)
+startingMenuS :: MenuS
+startingMenuS = MenuS [] 0 M.empty
 
 makeLenses ''Element
 makeLenses ''Item
 makeLenses ''MenuS
+type Menu = M.Map [T.Text] (I.IntMap Item)
+type InMenu = StateT MenuS (Reader Menu)
 
-item :: T.Text -> Element -> Item
-item l f = Item
+runMenu :: IORef MenuS -> Menu -> InMenu a -> IO a
+runMenu ms' m f = do
+    ms <- readIORef ms'
+    case runReader (runStateT f ms) m of
+      (a,s) -> do
+        print s
+        writeIORef ms' $! s
+        return a
+
+item :: T.Text -> Element -> Writer [Item] ()
+item l f = (tell . return) Item
     { _label        = l
     , _element      = f
-    , _fontColour   = 0.0
-    , _hovered      = 0.8
-    , _bgColour     = 0.9
-    , _pressed      = 1.0
+    , _fontColour   = vec4 1 1 1 1
+    , _hovered      = vec4 0.3 0.3 0.3 1
+    , _bgColour     = vec4 0.9 0.9 0.9 1
+    , _pressed      = vec4 1 1 1 1
     }
 
-close :: Item
-close = Item
-    { _label        = "Close"
-    , _element      = CloseButton
-    , _fontColour   = 0.0
-    , _hovered      = 0.8
-    , _bgColour     = 0.9
-    , _pressed      = 1.0
-    }
+button :: T.Text -> IO () -> Writer [Item] ()
+button l f = item l (Button f)
 
-(=:) :: k -> a -> (k, a)
-(=:) = (,)
+backto :: [T.Text] -> Writer [Item] ()
+backto = item "back" . ToMenu
 
-subm :: [T.Text] -> [Item] -> ([T.Text], I.IntMap Item)
-subm texts items = (texts, I.fromList (zip [0..] items))
+newMenu :: Writer Menu () -> IO (Menu, IORef MenuS)
+newMenu w = do
+    r <- newIORef (MenuS [] 0 M.empty)
+    return (execWriter w, r)
 
-mkMenu :: [([T.Text], I.IntMap Item)] -> Menu
-mkMenu = M.fromList
+newMenu' :: Writer Menu () -> Menu
+newMenu' = execWriter
+
+subMenu :: [T.Text] -> Writer [Item] () -> Writer Menu ()
+subMenu s
+    = tell . M.singleton s
+           . I.fromList
+           . zip [0..]
+           . execWriter
+
+topMenu :: Writer [Item] () -> Writer Menu ()
+topMenu = subMenu []
 
 safeInit :: [a] -> [a]
 safeInit [] = []
@@ -153,14 +148,17 @@ runHere :: InMenu (IO ())
 runHere = do
     Just Item{_element} <- selectedItem
     case _element of
-        Button f -> return f
-        Field f    -> f <$> maybe "" (T.pack . reverse) <$> dataHere
-        Toggle f       -> f <$> not.fromMaybe False <$> dataHere
-        ToMenu path    -> do
-            menu .= path
-            selection .= 0
-            return (return ())
-        _              -> return (return ())
+        Button f    -> return f
+        Field f     -> do
+          datum <- maybe "" (T.pack . reverse) <$> dataHere
+          return $! f datum
+        Toggle f    -> do
+          datum <- not . fromMaybe False <$> dataHere
+          return $! f datum
+        ToMenu path -> do
+          menu      .= path
+          selection .= 0
+          return (return ())
 
 select :: (Int -> Int) -> InMenu ()
 select f = do
@@ -174,91 +172,12 @@ select f = do
         Just s -> selection .= s
         _      -> return ()
 
-data GameMenu = GM
-    { menuEvents  :: !(Chan MenuEvent)
-    , menuResults :: !(Chan (IO ()))
-    , menuRender  :: !(IORef (IO ()))
-    , menuIsOpen  :: !(IORef (Maybe Bool))
-    , menuThread  :: !ThreadId
-    }
-
-{-# INLINE sendMenu #-}
-sendMenu :: MenuEvent -> GameMenu -> IO ()
-sendMenu e gm = writeChan (menuEvents gm) e
-
-whenOpen :: GameMenu -> (GameMenu -> IO ()) -> IO ()
-whenOpen gm f = do
-    isOpen <- readIORef (menuIsOpen gm)
-    case isOpen of
-        Just True -> f gm
-        _         -> return ()
-
-{-# INLINE drawMenu #-}
--- | Silently "fails" if there is no menu to draw
-drawMenu :: GameMenu -> IO ()
-drawMenu gm = join (readIORef (menuRender gm))
-
-{-# INLINE newMenu #-}
-newMenu :: Menu -> (Int -> Bool -> Item -> Maybe Dynamic -> IO ()) -> IO GameMenu
-newMenu m r = do
-    mevs  <- newChan
-    mres  <- newChan
-    frame <- newIORef (return ())
-    open  <- newIORef (Just True)
-    pid   <- forkIO (renderMenu r mevs mres frame open m)
-    forkIO (forever (join (readChan mres)))
-    return (GM mevs mres frame open pid)
-
-{-# INLINE renderMenu #-}
-renderMenu
-    :: (Int -> Bool -> Item -> Maybe Dynamic -> IO ())  -- ^ Used to render individual items, given the item's index, and whether it is selected
-    -> Chan MenuEvent                  -- ^ Chan of events
-    -> Chan (IO ())                    -- ^ Chan of results from pressing buttons, or performing actions in the menu generally
-    -> IORef (IO ())                   -- ^ Action to render the current menu with
-    -> IORef (Maybe Bool)
-    -> Menu
-    -> IO ()
-renderMenu render events results rendering open
-    = runMenu go originalMenuS
+runEvent :: Event -> InMenu (IO ())
+runEvent ev = case ev of
+    Select     -> runHere
+    Back       -> internally backOne
+    MenuUp     -> internally (select succ)
+    MenuDown   -> internally (select pred)
+    _          -> return (return ())
   where
-    originalMenuS = MenuS [] 0 M.empty
-
-    waitForResume :: InMenu ()
-    waitForResume = do
-        event <- liftIO (readChan events)
-        case event of
-            Resume -> return ()
-            _      -> waitForResume
-
-    toggleOpen = liftIO (modifyIORef' open (fmap not))
-
-    go :: InMenu ()
-    go = do
-        here    <- use menu
-        sel     <- use selection
-        datas   <- use elementData
-        submenu <- view (at here)
-        liftIO $! writeIORef rendering $! F.for_ submenu $! imapM_ (\ !sel' !item' ->
-            render 
-                sel' 
-                (sel' == sel) 
-                item'
-                $! M.lookup here datas >>= I.lookup sel')
-
-        event   <- liftIO (readChan events)
-        case event of
-            Kill        -> liftIO (writeIORef open Nothing)
-            Exit        -> toggleOpen >> waitForResume >> toggleOpen >> go
-            Resume      -> error "Not currently exited."
-            Restart     -> put originalMenuS >> go
-            BackMenu    -> backOne >> go
-            SelectUp    -> select pred >> go
-            SelectDown  -> select succ >> go
-            Select i    -> select (const i) >> go
-            Insert t    -> overHere [t] (t:) >> go
-            Empty       -> deleteDataHere >> go
-            Enter       -> do
-                !action <- runHere
-                liftIO (writeChan results action)
-                go
-
+    internally f = f >> return (return ())

@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings, LambdaCase, BangPatterns #-}
+module Main where
 import Data.IORef
 
 import Control.Monad
@@ -8,12 +9,10 @@ import qualified Graphics.UI.GLFW as GLFW
 import Graphics.UI.GLFW (Key(..))
 import Graphics.Rendering.OpenGL.Raw
 
-import Numeric.LinearAlgebra
-
 import Data.Foldable (for_)
 import Data.Time
 
-import Control.Lens hiding ((%=))
+import Control.Lens
 
 import Menu
 import Engine
@@ -28,28 +27,16 @@ import qualified Paths
 
 import qualified Data.Vector.Storable as S
 
-mainMenu :: IORef Bool -> Menu
-mainMenu open = mkMenu
-    [ subm []
-        [ item "options" (ToMenu ["options"])
-        , item "quit" (Button (void (quit open)))
-        ]
-    , subm ["options"]
-        [ item "player" (ToMenu ["options","player"])
-        ]
-    , subm ["options","player"]
-        [ item "player" (ToMenu ["options","player"])
-        ]
-    ]
-
 quit :: IORef Bool -> IO Bool
 quit open = do
     writeIORef open False
     return True
 
-view', proj, viewProj :: M
+view', viewMenu, proj, viewProj :: M
 viewProj = mXm proj view'
 view'    = lookAt (vec3 10 10 10) (vec3 0 (-0.25) 0) (vec3 0 1 0)
+viewMenu = lookAt (vec3 0 0 20) (vec3 0 0 13) (vec3 0 1 0)
+vmproj   = mXm proj viewMenu
 proj     = perspective 30 1 0.001 100
 
 initGLFW :: Int -> Int -> IO (IORef Bool)
@@ -71,19 +58,27 @@ initGLFW width height = do
     return open
 
 {-# INLINE keyCallback #-}
-keyCallback :: IORef GameS -> Scheme -> GLFW.Key -> Bool -> IO ()
-keyCallback g s = callback
+keyCallback :: IORef GameS -> IORef MenuS -> Menu -> Scheme -> GLFW.Key -> Bool -> IO ()
+keyCallback g' m' m s = callback
   where
-    control      = withControls s
-    sign         = fromIntegral . signum
-    callback k b = when b . update g . control k $ \case
-        AbsX 0 -> turnFlip (vec3 1 0 0)
-        AbsY 0 -> turnFlip (vec3 0 1 0)
-        AbsZ 0 -> turnFlip (vec3 0 0 1)
-        AbsX i -> turn (vec3 (sign i) 0 0)
-        AbsY i -> turn (vec3 0 (sign i) 0)
-        AbsZ i -> turn (vec3 0 0 (sign i))
-        _      -> return ()
+    inMenu  = runMenu m' m
+    control = withControls s
+    sign    = fromIntegral . signum
+    callback k down = when down $ control k $ \event -> do
+      case event of
+        ToggleMenu -> update g' (gameIsPaused %= not)
+        _          -> do
+          paused <- isPaused g'
+          if paused
+            then id =<< runMenu m' m (runEvent event)
+            else update g' $! case event of
+              AbsX 0     -> turnFlip (vec3 1 0 0)
+              AbsY 0     -> turnFlip (vec3 0 1 0)
+              AbsZ 0     -> turnFlip (vec3 0 0 1)
+              AbsX i     -> turn (vec3 (sign i) 0 0)
+              AbsY i     -> turn (vec3 0 (sign i) 0)
+              AbsZ i     -> turn (vec3 0 0 (sign i))
+              _          -> return ()
 
 main :: IO ()
 main = do
@@ -92,6 +87,11 @@ main = do
     model' <- newIORef (vec3 0 0 0)
     light' <- newIORef (vec3 4 2 2)
 
+    putStrLn "reading user config"
+    !config <- readConfig (Paths.config "config")
+    let !controls  = buildScheme config
+
+    putStrLn "starting game"
     game' <- newGame $ newStage $
         [ (vec3 x y z, Brick)
         | x <- [0, 9]
@@ -99,14 +99,27 @@ main = do
         , z <- [0,2,9]
         ]
 
-    !config <- readConfig (Paths.config "config")
-    let !controls = buildScheme config
-    GLFW.setKeyCallback (keyCallback game' controls)
+    putStrLn "init menu system"
+    (loadedMenu, menuS) <- newMenu $ do
+      topMenu $ do
+        button "start" $ update game' (gameIsPaused %= not)
+        button "yes" $ putStrLn "no"
+        button "no" $ putStrLn "yes"
+    let toggleMenu = do
+          update game' (gameIsPaused %= not)
+          writeIORef menuS startingMenuS
+
+    putStrLn "set control scheme"
+    GLFW.setKeyCallback (keyCallback game' menuS loadedMenu controls)
 
     putStrLn "loading models"
-    shroom      <- loadModel (Paths.model "shroom.obj")
-    bar         <- loadModel (Paths.model "bar.obj")
-    block       <- loadModel (Paths.model "block.obj")
+    shroom       <- loadModel (Paths.model "shroom.obj")
+    bar          <- loadModel (Paths.model "bar.obj")
+    block        <- loadModel (Paths.model "block.obj")
+    square       <- loadModel (Paths.model "menu.obj")
+    text'start   <- loadModel (Paths.fonts "start.obj")
+    text'options <- loadModel (Paths.fonts "options.obj")
+    text'quit    <- loadModel (Paths.fonts "quit.obj")
 
     putStrLn "compiling shaders"
     smoothBlock <- makeShaders (Paths.shader "smooth.vert") (Paths.shader "smooth.frag")
@@ -126,6 +139,8 @@ main = do
         . ufloat "scale"
         . uvec3 "w_offset"
         . uvec4 "diffuse"
+
+    
 
     putStrLn "init game"
     i' <- newIORef 0
@@ -176,12 +191,13 @@ main = do
                 diffuse
 
             stage :: GLmodel -> V -> V -> IO ()
-            stage m pos diffuse = drawSmooth m (0.4 `scale` pos) 0.2 diffuse
+            stage m pos = drawSmooth m (0.4 `scale` pos) 0.2
 
         -- Draw the snake's head in bright green, and its
         -- tail as a duller green.
-        for_ (game^?snake.body._head) $ \ (Ent pos _) -> do
+        for_ (game^?snake.body._head) $ \ (Ent pos _) ->
             stage block pos (vec4 0.3 1 0.3 1)
+
         for_ (game^.snake.body._tail) $ \ (Ent pos _) ->
             stage block pos (vec4 0.7 0.9 0.8 1)
 
@@ -198,14 +214,23 @@ main = do
               Good _ -> stage shroom pos (colourMult * vec4 0.2 0.2 1 1)
               Bad _  -> stage shroom pos (colourMult * vec4 1 0.2 0.2 1)
 
-        for_ (game^?snake.body._head) $ \ (Ent pos _) -> do
-            drawModel bar flat
-              viewProj
-              view'
-              proj
-              0.2
-              (0.4 `scale` pos)
-              (vec4 0.01 0.01 0.01 0.001)
+        -- draw the menu
+        when (_gameIsPaused game) $ do
+            ms <- readIORef menuS
+            ifor_ (loadedMenu^.ix (ms^.menu)) $ \ y itm -> 
+              drawModel square smoothBlock
+                vmproj
+                viewMenu
+                proj
+                0.1
+                (vec4 0 (fromIntegral y * 0.4) 11 1)
+                light
+                  (if ms^.selection == y
+                   then 0.6 `scale` globalLight
+                   else globalLight)
+                  (if ms^.selection == y
+                   then itm^.hovered
+                   else itm^.bgColour)
 
         writeIORef light' $! vec3 (1.5 * sin (0.01 * i)) 6 (1.5 * cos (0.01 * i))
 
