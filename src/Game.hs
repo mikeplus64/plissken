@@ -16,6 +16,7 @@ import Control.Lens hiding ((<|), (|>))
 import Prelude hiding (head, last)
 import Data.IORef
 
+import System.Random
 import Geometry hiding ((<|), (|>), step)
 import Menu
 
@@ -72,24 +73,69 @@ type Stage = Positioned Block
 
 data GameS
     = Game  { _stage         :: !Stage
-            , _stageBounds   :: !(Int,Int)
+            , _stageBounds   :: !Int
             , _snake         :: !Snake
             , _score         :: !Int
             , _gameTicks     :: !Integer
             , _message       :: !(Maybe String) 
             , _gameIsPaused  :: !Bool
-            } deriving (Show,Read,Eq)
+            , _stdGen        :: !StdGen
+            } deriving (Show,Read)
 
 makeLenses ''Flame
 makeLenses ''Entity
 makeLenses ''GameS
 makeLenses ''Snake
 
+rand :: (Int,Int) -> Game Int
+rand bounds = do
+  gen' <- use stdGen
+  case randomR bounds gen' of
+    (i,gen) -> do
+      stdGen .= gen
+      return i
+
+intToBlock :: Int -> Block
+intToBlock i = case i of
+  0 -> Brick
+  1 -> Wood
+  2 -> Water
+  3 -> Good Grape
+  4 -> Good Apple
+  5 -> Good Orange
+  6 -> Bad Grape
+  7 -> Bad Apple
+  8 -> Bad Orange
+  _ -> error "intToBlock: invalid i"
+
+-- | the number returned is an integer, but is stored floating point
+randPos :: Game Pos
+randPos = do
+    x <- fromIntegral `fmap` rand (0,9)
+    y <- fromIntegral `fmap` rand (0,9)
+    z <- fromIntegral `fmap` rand (0,9)
+    return (vec3 x y z)
+
+addFruit :: (Int,Int) -> Game ()
+addFruit fruitType = do
+    pos <- randPos 
+    stg <- use stage
+    if M.member pos stg
+      then addFruit fruitType -- simply try again
+      else do
+        block' <- intToBlock `fmap` rand fruitType
+        stage  %= M.insert pos block'
+
+goodFruits,badFruits,anyFruits :: (Int,Int)
+goodFruits = (3,5)
+badFruits  = (6,8)
+anyFruits  = (3,8)
+ 
 endGame :: Game ()
 endGame = lift Nothing
 
 pushEnt :: Entity -> Entity
-pushEnt (Ent p v) = Ent (cmap (`mod'` 20) (p+v)) v
+pushEnt (Ent p v) = Ent (cmap (`mod'` 10) (p+v)) v
   where
     mod' x y = fromIntegral ((floor x :: Int) `mod` y)
 
@@ -146,6 +192,7 @@ stepGame = do
             Just oldLast <- preuse (snake.body._last)
             score        += 1
             snake.body   %= (|> oldLast)
+            addFruit goodFruits
 
         -- remove the last segment of the snake if the fruit was off
         -- delete the block in the stage too
@@ -154,6 +201,7 @@ stepGame = do
             snake.body   %= \b -> case S.viewr b of
                 before :> _ -> before
                 _           -> b
+            addFruit anyFruits
 
         Water -> return ()
 
@@ -179,26 +227,25 @@ stepGame = do
 
     gameTicks += 1
 
-
 newStage :: [(Pos,Block)] -> Stage
 newStage = M.fromList
 
 newGame :: Stage -> IO (IORef GameS)
 newGame _stage = do
-    let _snake = Snake (S.singleton (Ent (vec3 4 0 0) (vec3 1 0 0))) S.empty
+    let _snake = Snake (S.singleton (Ent (vec3 4 4 4) (vec3 1 0 0))) S.empty
         _score = 0
         _gameTicks = 0
         _message = Nothing
         _gameIsPaused = False
-        _stageBounds = (19,19)
+        _stageBounds = 10
+    _stdGen <- newStdGen
     newIORef Game{..}
 
 update :: IORef GameS -> Game a -> IO ()
 update s' f = do
     s <- readIORef s'
-    case execStateT (stepGame >> f) s of
+    case execStateT f s of
         Just x -> do
-          print x
           writeIORef s' $! x
         _      -> putStrLn "no update?"
 
@@ -206,9 +253,7 @@ tick :: IORef GameS -> IO ()
 tick s' = do
     s <- readIORef s'
     case execStateT stepGame s of
-        Just x -> do
-          print x
-          writeIORef s' $! x
+        Just x -> writeIORef s' $! x
         _      -> putStrLn "no update?"
 
 forStage :: Stage -> (V -> Block -> IO ()) -> IO ()
@@ -221,3 +266,7 @@ turnFlip new = do
       then snake.body._head.velocity .= -new
       else snake.body._head.velocity .= new
 
+linedUp :: V -> V -> Bool
+linedUp x y = atIndex x 0 == atIndex y 0 && atIndex x 1 == atIndex y 1
+           || atIndex x 1 == atIndex y 1 && atIndex x 2 == atIndex y 2
+           || atIndex x 2 == atIndex y 2 && atIndex x 0 == atIndex y 0

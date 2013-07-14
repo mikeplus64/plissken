@@ -6,9 +6,10 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE EmptyDataDecls #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -funbox-strict-fields #-}
 module Uniform where
-import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as B
 import Graphics.Rendering.OpenGL.Raw
 import Foreign
 
@@ -61,6 +62,18 @@ instance Show (Needs s) where
     show (More _ x xs) = "More " ++ show x ++ " (" ++ show xs ++ ")"
     show OK            = "OK"
 
+getUniformLoc :: GLuint -> B.ByteString -> IO GLint
+getUniformLoc prog name = do
+  loc <- name `B.useAsCString` glGetUniformLocation prog
+  return loc
+  if loc >= 0
+    then return loc
+    else if "gl_" `B.isPrefixOf` name
+      then error $ show name ++ " cannot be used as a uniform in the program " ++ show prog ++ " as it starts with the reserved prefix 'gl_'" 
+      else do
+         putStrLn $ "Warning: uniform " ++ show name ++ "'s location is < 0"
+         return loc
+
 class GetUniforms s where
     getUniforms :: Needs s -> GLuint -> IO (Uniforms s)
 instance GetUniforms (IO ()) where
@@ -69,7 +82,7 @@ instance GetUniforms (IO ()) where
 instance GetUniforms s => GetUniforms (t -> s) where
     {-# INLINE getUniforms #-}
     getUniforms (More _ s xs) prog = do
-        this <- s `B.useAsCString` glGetUniformLocation prog
+        this <- getUniformLoc prog s
         rest <- getUniforms xs prog
         return (Uc this rest)
 

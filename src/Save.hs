@@ -1,8 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Save 
     ( Savable(..)
+    , Key(..), Type(..), Value(..)
     , Config
-    , Key, Type
     , mkConfig
     , conf
     , textT, natT, listT, arrayT, pairT
@@ -164,7 +164,7 @@ parseKeyValues types = M.fromList <$> A.many1' correctlyTypedKV
         return (Key keys typ, val)
 
 parseConfig :: T.Text -> Config
-parseConfig t = case A.parseOnly (parseKeyValues M.empty) t of
+parseConfig t = case A.parseOnly (parseKeyValues M.empty) (t <> "\n") of
     Right c -> c
     Left e  -> error e
 

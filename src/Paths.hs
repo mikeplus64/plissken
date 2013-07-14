@@ -12,7 +12,7 @@ model  x = gdata </> "models" </> x
 shader x = gdata </> "shaders" </> x
 sound  x = gdata </> "sound" </> x
 save   x = game </> "saves" </> x
-config x = game </> "config" </> x
+config x = game </> x
 
 list :: FilePath -> IO [FilePath]
 list = fmap removeDots . getDirectoryContents

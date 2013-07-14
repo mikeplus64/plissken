@@ -49,10 +49,15 @@ defaultScheme = execWriter $ do
     CharKey 'D' `maps` AbsX 1
     CharKey 'E' `maps` AbsZ (-1)
     CharKey 'Q' `maps` AbsZ 1
+
+    CharKey 'J' `maps` AbsX 0
+    CharKey 'K' `maps` AbsY 0
+    CharKey 'L' `maps` AbsZ 0
   where
     maps k x = tell (M.singleton k x)
 
-withControls :: Scheme -> GLFW.Key -> (Event -> IO ()) -> IO ()
+{-# INLINE withControls #-}
+withControls :: Applicative m => Scheme -> GLFW.Key -> (Event -> m ()) -> m ()
 withControls s k = F.for_ (M.lookup k s)
 
 buildScheme :: Config -> Scheme

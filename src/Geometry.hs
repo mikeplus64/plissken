@@ -8,7 +8,6 @@ module Geometry
     , translation
     , perspective
     , lookAt
-    , x,y,z,w
     , module X
     ) where
 

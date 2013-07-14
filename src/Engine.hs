@@ -7,6 +7,7 @@ import qualified Data.Vector.Storable as S
 import Graphics.Rendering.OpenGL.Raw
 import Foreign
 
+import Geometry (vec3, V)
 import Uniform
 import Shader
 import Model
@@ -117,4 +118,19 @@ staticArray = newBuffer gl_ARRAY_BUFFER gl_STATIC_DRAW
 staticElementArray :: Storable a => S.Vector a -> IO GLuint
 staticElementArray = newBuffer gl_ELEMENT_ARRAY_BUFFER gl_STATIC_DRAW
 
+--------------------------------------------------------------------------------
+--  Generated models
 
+grid3D :: V
+grid3D = S.concat (map ygrid boundsA ++ map xgrid boundsA)
+  where
+    boundsA = [-1, -0.8 .. 1]
+    boundsB = [-1, 1]
+    ygrid y = S.fromList $ do
+      x <- boundsA
+      z <- boundsB
+      [x, y, z]
+    xgrid x = S.fromList $ do
+      y <- boundsA
+      z <- boundsB
+      [x, y, z]
