@@ -33,7 +33,7 @@ data Event
     | AbsX !Int8
     | AbsY !Int8
     | AbsZ !Int8
-    | Char !Char
+    | Flamethrow
   deriving (Show,Read,Eq,Ord)
 
 type Scheme = M.Map GLFW.Key Event
@@ -50,6 +50,7 @@ defaultScheme = execWriter $ do
     CharKey 'J'  `maps` AbsX 0
     CharKey 'K'  `maps` AbsY 0
     CharKey 'L'  `maps` AbsZ 0
+    KeySpace     `maps` Select
     -- menu controls
     KeyEsc       `maps` ToggleMenu
     KeyEnter     `maps` Select

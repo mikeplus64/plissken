@@ -1,7 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Config where
 import Save
-
 defaultConfig :: Config
 defaultConfig = mkConfig $ do
     conf "p.name" (text "MAL")
@@ -11,4 +10,3 @@ defaultConfig = mkConfig $ do
              ]
     conf "options.resx" (nat 512)
     conf "options.rexy" (nat 512)
-

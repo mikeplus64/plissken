@@ -3,37 +3,59 @@
 module Menu where
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as I
-import qualified Data.Text as T
+import Data.Foldable (for_)
 import Data.Dynamic
 import Data.Dynamic.Lens
 import Data.Maybe
 import Data.IORef
+import Data.String
 import Control.Monad.State.Strict
 import Control.Monad.Writer.Strict
 import Control.Monad.Reader
 import Control.Applicative
 import Control.Lens hiding (simple, element)
+import Graphics.UI.GLFW (Key(..))
 import Geometry (V, vec4)
+import qualified Data.ByteString.Char8 as B
+import Data.ByteString.Char8 (ByteString)
+import Foreign.C
 import Controls
+import Util()
 
 data Element
-  = Button          { _press       :: !(IO ()) }
-  | Field           { _enter       :: !(T.Text -> IO ()) }
-  | Toggle          { _toggle      :: !(Bool -> IO ()) }
-  | ToMenu          { _targetMenu  :: [T.Text] }
+    = Button { _press :: !(IO ()) }
+    | Field  { _press :: !(IO ())
+             , _query :: !(IO ByteString)
+             }
+    | ToMenu { _target :: ![String] }
+    | GoBack
 
 instance Show Element where
     show (Button _)  = "Button"
-    show (Field _)   = "Field"
-    show (Toggle _)  = "Toggle"
-    show (ToMenu t)  = "ToMenu " ++ show t
+    show (Field _ _) = "Field"
 
 -- | RGBA colour
 type Colour = V
 
+data Label
+    = Plain !CString
+    | Updated !(IO ByteString)
+
+{-# INLINE withLabel #-}
+withLabel :: Label -> (CString -> IO ()) -> IO ()
+withLabel (Plain str)   f = f str
+withLabel (Updated iob) f = iob >>= flip B.useAsCString f
+
+instance IsString Label where
+    fromString s = Plain (fromString s)
+
+instance Show Label where
+    show (Plain s) = "Plain " ++ show s
+    show _         = "Updated"
+
 data Item = Item
-    { _label         :: !T.Text
-    , _element       :: Element
+    { _label         :: !Label
+    , _ielement      :: !Element
     , _fontColour    :: !Colour
     , _bgColour      :: !Colour
     , _hovered       :: !Colour
@@ -41,61 +63,86 @@ data Item = Item
     } deriving (Show)
 
 data MenuS = MenuS
-    { _menu          :: [T.Text]
+    { _menu          :: ![String]
     , _selection     :: !Int
-    , _elementData   :: !(M.Map [T.Text] (I.IntMap Dynamic))
     } deriving (Show)
 
 startingMenuS :: MenuS
-startingMenuS = MenuS [] 0 M.empty
+startingMenuS = MenuS [] 0
 
 makeLenses ''Element
 makeLenses ''Item
 makeLenses ''MenuS
-type Menu = M.Map [T.Text] (I.IntMap Item)
+
+type Menu   = M.Map [String] (I.IntMap Item)
 type InMenu = StateT MenuS (Reader Menu)
+
+type WIO w  = WriterT w IO
+type MkMenu = WIO Menu
+type Items  = [Item]
 
 runMenu :: IORef MenuS -> Menu -> InMenu a -> IO a
 runMenu ms' m f = do
     ms <- readIORef ms'
     case runReader (runStateT f ms) m of
       (a,s) -> do
-        print s
         writeIORef ms' $! s
         return a
 
-item :: T.Text -> Element -> Writer [Item] ()
-item l f = (tell . return) Item
+item' :: Label -> Element -> Item
+item' l f = Item
     { _label        = l
-    , _element      = f
+    , _ielement     = f
     , _fontColour   = vec4 1 1 1 1
     , _hovered      = vec4 0.3 0.3 0.3 1
     , _bgColour     = vec4 0.9 0.9 0.9 1
     , _pressed      = vec4 1 1 1 1
     }
 
-button :: T.Text -> IO () -> Writer [Item] ()
-button l f = item l (Button f)
+showed :: Show a => Label -> a -> (a -> a) -> (a -> IO ()) -> WIO Items ()
+showed l z f cc = do
+    elm <- liftIO (newShow z f cc)
+    tell [item' l elm]
 
-backto :: [T.Text] -> Writer [Item] ()
-backto = item "back" . ToMenu
+newMenu :: MkMenu () -> IO Menu
+newMenu = execWriterT
 
-newMenu :: Writer Menu () -> IO (Menu, IORef MenuS)
-newMenu w = do
-    r <- newIORef (MenuS [] 0 M.empty)
-    return (execWriter w, r)
-
-newMenu' :: Writer Menu () -> Menu
-newMenu' = execWriter
-
-subMenu :: [T.Text] -> Writer [Item] () -> Writer Menu ()
+subMenu :: [String] -> WIO Items () -> MkMenu ()
 subMenu s
-    = tell . M.singleton s
-           . I.fromList
-           . zip [0..]
-           . execWriter
+    = lift . execWriterT
+  >=> tell . M.singleton s . I.fromList . zip [0..]
 
-topMenu :: Writer [Item] () -> Writer Menu ()
+newBool :: (Bool -> IO ()) -> IO Element
+newBool f = do
+    ref <- newIORef False
+    return Field
+        { _press = do modifyIORef' ref not; readIORef ref >>= f
+        , _query = B.pack . show <$> readIORef ref
+        }
+
+newShow :: Show a => a -> (a -> a) -> (a -> IO ()) -> IO Element
+newShow z f cc = do
+    ref <- newIORef z
+    return Field
+        { _press = do modifyIORef' ref f; readIORef ref >>= cc
+        , _query = B.pack . show <$> readIORef ref
+        }
+
+button :: Label -> IO () -> WIO Items ()
+button l f = tell [item' l (Button f)]
+
+toggle :: Label -> (Bool -> IO ()) -> WIO Items ()
+toggle l f = do
+    e <- liftIO (newBool f)
+    tell [item' l e]
+
+link :: Label -> [String] -> WIO Items ()
+link l s = tell [item' l (ToMenu s)]
+
+back :: Label -> WIO Items ()
+back l = tell [item' l GoBack]
+
+topMenu :: WIO Items () -> MkMenu ()
 topMenu = subMenu []
 
 safeInit :: [a] -> [a]
@@ -115,51 +162,6 @@ selectedItem = do
         sub <- M.lookup pos m
         I.lookup sel sub
 
-overHere :: (Show a, Typeable a) => a -> (a -> a) -> InMenu ()
-overHere x f = do
-    stuff <- dataHere
-    case stuff of
-        Just d -> enterHere (f d)
-        _      -> enterHere x
-
-enterHere :: Typeable a => a -> InMenu ()
-enterHere t = do
-    pos <- use menu
-    sel <- use selection
-    elementData %= 
-      M.alter 
-        (Just . maybe (I.singleton sel (toDyn t)) 
-                      (I.insert sel (toDyn t)))
-        pos
-
-dataHere :: Typeable a => InMenu (Maybe a)
-dataHere = do
-    pos <- use menu
-    sel <- use selection
-    preuse (elementData.ix pos.ix sel._Dynamic)
-
-deleteDataHere :: InMenu ()
-deleteDataHere = do
-    pos <- use menu
-    sel <- use selection
-    elementData.at pos._Just.at sel .= Nothing
-
-runHere :: InMenu (IO ())
-runHere = do
-    Just Item{_element} <- selectedItem
-    case _element of
-        Button f    -> return f
-        Field f     -> do
-          datum <- maybe "" (T.pack . reverse) <$> dataHere
-          return $! f datum
-        Toggle f    -> do
-          datum <- not . fromMaybe False <$> dataHere
-          return $! f datum
-        ToMenu path -> do
-          menu      .= path
-          selection .= 0
-          return (return ())
-
 select :: (Int -> Int) -> InMenu ()
 select f = do
     path <- use menu
@@ -171,6 +173,18 @@ select f = do
       of
         Just s -> selection .= s
         _      -> return ()
+
+runHere :: InMenu (IO ())
+runHere = do
+    Just itm <- selectedItem
+    case _ielement itm of
+        Button p    -> return p
+        Field  p _  -> return p
+        ToMenu path -> do
+            menu      .= path
+            selection .= 0
+            return (return ())
+        GoBack      -> backOne >> return (return ())
 
 runEvent :: Event -> InMenu (IO ())
 runEvent ev = case ev of

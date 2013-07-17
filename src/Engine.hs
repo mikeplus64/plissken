@@ -5,12 +5,15 @@
 module Engine where
 import qualified Data.Vector.Storable as S
 import Graphics.Rendering.OpenGL.Raw
+import Graphics.Rendering.FTGL
+import Foreign.C
 import Foreign
 
 import Geometry (vec3, V)
 import Uniform
 import Shader
 import Model
+import Menu
 import Util
 
 clear :: IO ()
@@ -55,6 +58,29 @@ newGLmodel !vert !norm !uv !elems = do
     uvArray       <- staticArray uv
     ixArray       <- staticElementArray elems
     return GLmodel{ arrSize = fromIntegral (S.length elems), .. }
+
+{-# INLINE renderText' #-}
+renderText' :: Font -> GLfloat -> GLfloat -> CString -> IO ()
+renderText' f x y s = do
+    glRasterPos2f x y
+    frenderFont f s 0
+
+{-# INLINE renderLabel #-}
+renderLabel :: Font -> GLfloat -> GLfloat -> Label -> IO ()
+renderLabel f x y l = withLabel l (renderText f x y)
+
+{-# INLINE renderText #-}
+renderText :: Font -> GLfloat -> GLfloat -> CString -> IO ()
+renderText f x y t' = do
+    glColor3f 1 1 1
+    renderText' f x y t
+    glColor3f 0 0 0
+    renderText' f (x+0.002) y t
+    renderText' f (x-0.002) y t
+    renderText' f x (y+0.002) t
+    renderText' f x (y-0.002) t
+  where
+    t    = castPtr t'
 
 {-# INLINE drawModel #-}
 drawModel :: Uploadable s r => GLmodel -> Shaders s -> r

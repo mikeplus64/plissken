@@ -112,13 +112,13 @@ lookupConf key@(Key _ type_) conf = do
     return value
 
 parseValue :: A.Parser Value
-parseValue = text <|> number <|> list <|> nil
+parseValue = text' <|> number <|> list <|> nil
   where
     chars   = mapM A.char
 
     number  = N <$> A.number
 
-    text    = T <$> do
+    text'   = T <$> do
         A.char '"'
         inside <- A.manyTill 
             (chars "\\\"" <|> fmap return A.anyChar)

@@ -1,4 +1,4 @@
-{-# LANGUAGE TemplateHaskell, BangPatterns, FlexibleInstances, RecordWildCards #-}
+{-# LANGUAGE TemplateHaskell, BangPatterns, FlexibleInstances, RecordWildCards, RankNTypes #-}
 module Game where
 import qualified Data.Map.Strict as M
 import qualified Data.Sequence as S
@@ -6,6 +6,7 @@ import Data.Sequence.Lens
 import Data.Sequence (ViewL(..), ViewR(..), (|>), (<|), Seq)
 
 import qualified Data.Foldable as F
+import qualified Data.Traversable as F
 import Data.Foldable (for_)
 
 import Control.Monad.State.Strict
@@ -15,8 +16,10 @@ import Data.Maybe
 import Control.Lens hiding ((<|), (|>))
 import Prelude hiding (head, last)
 import Data.IORef
+import Data.Time
 
 import System.Random
+import System.IO.Unsafe (unsafePerformIO)
 import Geometry hiding ((<|), (|>), step)
 
 type Game = StateT GameS Maybe
@@ -70,21 +73,58 @@ data Block
 
 type Stage = Positioned Block
 
-data GameS
-    = Game  { _stage         :: !Stage
-            , _stageBounds   :: !Int
-            , _snake         :: !Snake
-            , _score         :: !Int
-            , _gameTicks     :: !Integer
-            , _message       :: !(Maybe String) 
-            , _gameIsPaused  :: !Bool
-            , _stdGen        :: !StdGen
-            } deriving (Show,Read)
+data GameS = Game  
+    { _stage         :: !Stage
+    , _stageBounds   :: !Int
+    , _snakeIsAlive  :: !Bool
+    , _snake         :: !Snake
+    , _score         :: !Integer
+    , _gameTicks     :: !Integer
+    , _message       :: !(Maybe String) 
+    , _gameIsPaused  :: !Bool
+    , _difficulty    :: !Difficulty
+    , _stdGen        :: !StdGen
+    } deriving (Show)
+
+data Difficulty = Difficulty
+    { _dieAtWall      :: !Bool
+    , _selfCollisions :: !Bool
+    , _speed          :: !NominalDiffTime
+    } deriving (Show)
+
+makeLenses ''Difficulty
+
+easy :: Difficulty
+easy = Difficulty False True 0.30
+
+medium :: Difficulty
+medium = Difficulty False False 0.15
+
+hard :: Difficulty
+hard = Difficulty True False 0.10
+
+addToSpeed :: NominalDiffTime -> NominalDiffTime
+addToSpeed x = fromIntegral (floor (100*x+5) `mod` 100 :: Int) / 100
 
 makeLenses ''Flame
 makeLenses ''Entity
 makeLenses ''GameS
 makeLenses ''Snake
+
+
+tick :: IORef GameS -> IO ()
+tick s' = do
+    s <- readIORef s'
+    case execStateT stepGame s of
+        Just x
+            | _snakeIsAlive x -> writeIORef s' $! x
+            | otherwise       ->
+                update s' $ do
+                    restart
+                    difficulty   .= x^.difficulty
+                    message      .= x^.message
+                    gameIsPaused .= True
+        _ -> return ()
 
 rand :: (Int,Int) -> Game Int
 rand bounds = do
@@ -94,25 +134,51 @@ rand bounds = do
       stdGen .= gen
       return i
 
+randf :: (Int,Int) -> Game F
+randf bounds = fromIntegral `fmap` rand bounds
+
+addB, subB :: Int -> Int -> Int
+addB x y = mod (x + y) 10
+subB x y = mod (x - y) 10
+
+gen4x4 :: Int -> Int -> Int -> Block -> Stage
+gen4x4 x' y' z' b = M.fromList
+    [ (vec3 (fromIntegral x) (fromIntegral y) (fromIntegral z), b)
+    | x <- [x',addB x' 1]
+    , y <- [y',addB y' 1]
+    , z <- [z',addB z' 1]
+    ]
+
+generateLevel :: Int -> Game ()
+generateLevel blockCount = do
+    () <- replicateM_ (blockCount `div` 2) $! do
+        x' <- rand (0,9)
+        y' <- rand (0,9)
+        z' <- rand (0,9)
+        b  <- intToBlock `fmap` rand (0,1)
+        stage %= M.union (gen4x4 x' y' z' b) 
+    stage %= M.filterWithKey (\k _ -> not (linedUp (vec3 4 4 4) k))
+    return ()
+
 intToBlock :: Int -> Block
 intToBlock i = case i of
-  0 -> Brick
-  1 -> Wood
-  2 -> Water
-  3 -> Good Grape
-  4 -> Good Apple
-  5 -> Good Orange
-  6 -> Bad Grape
-  7 -> Bad Apple
-  8 -> Bad Orange
-  _ -> error "intToBlock: invalid i"
+    0 -> Brick
+    1 -> Wood
+    2 -> Water
+    3 -> Good Grape
+    4 -> Good Apple
+    5 -> Good Orange
+    6 -> Bad Grape
+    7 -> Bad Apple
+    8 -> Bad Orange
+    _ -> error "intToBlock: invalid i"
 
 -- | the number returned is an integer, but is stored floating point
 randPos :: Game Pos
 randPos = do
-    x <- fromIntegral `fmap` rand (0,9)
-    y <- fromIntegral `fmap` rand (0,9)
-    z <- fromIntegral `fmap` rand (0,9)
+    x <- randf (0,9)
+    y <- randf (0,9)
+    z <- randf (0,9)
     return (vec3 x y z)
 
 addFruit :: (Int,Int) -> Game ()
@@ -167,19 +233,45 @@ collided (Snake body' _) level
             Just b -> modify ((pos,b):)
             _      -> return ()
 
+selfColliding :: Snake -> Bool
+selfColliding (Snake bdy _)
+  = F.any (\(Ent pos _) -> headPos == Just (fr pos)) (bdy^._tail)
+  where
+    headPos = fmap fr (bdy^?_head.position)
+    fr :: V -> V
+    fr = cmap (fromIntegral . (floor :: Float -> Int))
+
 turn :: Vel -> Game ()
 turn v = snake.body._head.velocity .= v
-
+ 
+    
 end :: String -> Game ()
 end s = do
-    message .= Just s
-    lift Nothing
+    message      .= Just s
+    snakeIsAlive .= False
+    gameIsPaused .= True
+
+restart :: Game GameS
+restart = do
+    now <- get
+    gen <- use stdGen
+    stg <- use stage
+    put (initialGame gen stg)
+    stage .= M.empty
+    generateLevel 15
+    return now
 
 {-# INLINE stepGame #-}
 stepGame :: Game ()
 stepGame = do
     False         <- use gameIsPaused
+    message .= Nothing
+
+    
     Just newSnake <- uses snake stepSnakeAlone
+    selfCollideTest <- use (difficulty.selfCollisions)
+    when (selfCollideTest && selfColliding newSnake) $
+        end "Self collision!"
     collisions    <- uses stage (collided newSnake)
     snake        .= newSnake
 
@@ -188,8 +280,10 @@ stepGame = do
         -- delete the block in the stage too
         Good _ -> do
             stage.at pos .= Nothing
+            -- this is fairly safe, as we know that to get here at all
+            -- the snake should not be null.
             Just oldLast <- preuse (snake.body._last)
-            score        += 1
+            score        += 100
             snake.body   %= (|> oldLast)
             addFruit goodFruits
 
@@ -200,12 +294,17 @@ stepGame = do
             snake.body   %= \b -> case S.viewr b of
                 before :> _ -> before
                 _           -> b
+            bdy <- use (snake.body)
             addFruit anyFruits
 
         Water -> return ()
 
         -- if it's anything else, colliding with it is deadly.
-        _     -> end "Killed by a head-on collision!"
+        _     -> do
+            diesFromWalls <- use (difficulty.dieAtWall)
+            if diesFromWalls
+               then end "Deadly collision!"
+               else lift Nothing
 
     level    <- use stage
     oldFlame <- use (snake.flame)
@@ -224,35 +323,44 @@ stepGame = do
                     snake.flame %= (|> f)
             _ -> snake.flame %= (|> f)
 
+    snake' <- use snake
+
+    when (S.null (_body snake')) $ end "Ran out of snake!"
+    when (selfImmolated snake')  $ end "Cooked to death!"
+
     gameTicks += 1
+
+flamethrow :: Game ()
+flamethrow = do
+    Just ent <- preuse (snake.body._head)
+    snake.flame %= (|> Flame 5 (pushEnt ent))
 
 newStage :: [(Pos,Block)] -> Stage
 newStage = M.fromList
 
-newGame :: Stage -> IO (IORef GameS)
-newGame _stage = do
+initialGame :: StdGen -> Stage -> GameS
+initialGame _stdGen _stage =
     let _snake = Snake (S.singleton (Ent (vec3 4 4 4) (vec3 1 0 0))) S.empty
         _score = 0
         _gameTicks = 0
         _message = Nothing
         _gameIsPaused = False
         _stageBounds = 10
-    _stdGen <- newStdGen
-    newIORef Game{..}
+        _snakeIsAlive = True
+        _difficulty  = medium
+    in Game{..}
 
-update :: IORef GameS -> Game a -> IO ()
+newGame :: Stage -> IO (IORef GameS)
+newGame _stage = do
+    _stdGen <- newStdGen
+    newIORef (initialGame _stdGen _stage)
+
+update :: IORef s -> StateT s Maybe a -> IO ()
 update s' f = do
     s <- readIORef s'
     case execStateT f s of
         Just x -> writeIORef s' $! x
-        _      -> putStrLn "no update?"
-
-tick :: IORef GameS -> IO ()
-tick s' = do
-    s <- readIORef s'
-    case execStateT stepGame s of
-        Just x -> writeIORef s' $! x
-        _      -> putStrLn "no update?"
+        _      -> return ()
 
 forStage :: Stage -> (V -> Block -> IO ()) -> IO ()
 forStage s f = void (M.traverseWithKey f s)
@@ -268,6 +376,10 @@ linedUp :: V -> V -> Bool
 linedUp x y = atIndex x 0 == atIndex y 0 && atIndex x 1 == atIndex y 1
            || atIndex x 1 == atIndex y 1 && atIndex x 2 == atIndex y 2
            || atIndex x 2 == atIndex y 2 && atIndex x 0 == atIndex y 0
-
+           
 isPaused :: IORef GameS -> IO Bool
 isPaused = fmap _gameIsPaused . readIORef
+
+{-# INLINE gameField #-}
+gameField :: IORef GameS -> Lens' GameS a -> IO a
+gameField ref getter = view getter `fmap` readIORef ref

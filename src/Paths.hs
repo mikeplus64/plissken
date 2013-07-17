@@ -7,10 +7,10 @@ gdata, game :: FilePath
 gdata    = "data"
 game     = "game"
 
-model, paths, shader, sound, save, config :: FilePath -> FilePath
+model, shader, sound, save, config, fonts :: FilePath -> FilePath
 model  x = gdata </> "models" </> x
-paths  x = model </> x
 shader x = gdata </> "shaders" </> x
+fonts  x = gdata </> "fonts" </> x
 sound  x = gdata </> "sound" </> x
 save   x = game </> "saves" </> x
 config x = game </> x
