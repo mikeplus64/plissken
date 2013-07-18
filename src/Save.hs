@@ -12,6 +12,7 @@ module Save
     , readConfig
     , formatConfig
     , saveConfig
+    , intOf
     ) where
 import qualified Data.Map.Strict as M
 import qualified Data.Vector as V
@@ -184,3 +185,6 @@ formatConfig m = execWriter $ flip M.traverseWithKey m $ \(Key cat _) val -> do
     str = tell
     ln  = tell "\n"
 
+intOf :: Integral a => a -> Maybe Value -> a
+intOf _ (Just (N v)) = fromIntegral (floor v)
+intOf x _            = x

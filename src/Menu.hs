@@ -3,36 +3,43 @@
 module Menu where
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as I
-import Data.Foldable (for_)
-import Data.Dynamic
-import Data.Dynamic.Lens
-import Data.Maybe
+import Data.Foldable (fold)
 import Data.IORef
 import Data.String
+import Data.Char
 import Control.Monad.State.Strict
 import Control.Monad.Writer.Strict
 import Control.Monad.Reader
 import Control.Applicative
 import Control.Lens hiding (simple, element)
-import Graphics.UI.GLFW (Key(..))
 import Geometry (V, vec4)
 import qualified Data.ByteString.Char8 as B
 import Data.ByteString.Char8 (ByteString)
 import Foreign.C
+import Graphics.UI.GLFW (Key(..))
 import Controls
 import Util()
 
 data Element
-    = Button { _press :: !(IO ()) }
-    | Field  { _press :: !(IO ())
-             , _query :: !(IO ByteString)
-             }
-    | ToMenu { _target :: ![String] }
+    = Button  { _press :: !(IO ()) }
+    | Field   { _press :: !(IO ())
+              , _query :: !(IO ByteString)
+              }
+    | TextBox { _enter :: !(Maybe Char -> IO ())
+              , _press :: !(IO ())
+              , _query :: !(IO ByteString)
+              }
+    | ToMenu  { _target :: ![String] }
     | GoBack
+    | NilE
 
 instance Show Element where
-    show (Button _)  = "Button"
-    show (Field _ _) = "Field"
+    show Button{}    = "Button"
+    show Field{}     = "Field"
+    show (ToMenu s)  = "ToMenu " ++ show s
+    show GoBack      = "GoBack"
+    show NilE        = "NilE"
+    show TextBox{}   = "TextBox"
 
 -- | RGBA colour
 type Colour = V
@@ -104,6 +111,9 @@ showed l z f cc = do
     elm <- liftIO (newShow z f cc)
     tell [item' l elm]
 
+dynLabel :: IO (Maybe B.ByteString) -> WIO Items ()
+dynLabel f = tell [item' (Updated (fold <$> f)) NilE]
+
 newMenu :: MkMenu () -> IO Menu
 newMenu = execWriterT
 
@@ -128,8 +138,32 @@ newShow z f cc = do
         , _query = B.pack . show <$> readIORef ref
         }
 
+newTextBox :: (ByteString -> IO ()) -> (ByteString -> IO ()) -> IO Element
+newTextBox update pressed = do
+    ref <- newIORef ""
+    return TextBox
+        { _enter = \c' -> do
+               case c' of
+                   Just c -> modifyIORef' ref (`B.snoc` toLower c)
+                   _      -> modifyIORef' ref (^._init)
+               bs <- readIORef ref
+               update bs
+        , _press = readIORef ref >>= pressed
+        , _query = readIORef ref
+        }
+
 button :: Label -> IO () -> WIO Items ()
 button l f = tell [item' l (Button f)]
+
+textBox :: Label -> (ByteString -> IO ()) -> WIO Items ()
+textBox l f = do
+    tb <- liftIO (newTextBox (\_ -> return ()) f)
+    tell [item' l tb]
+
+textBox' :: Label -> (ByteString -> IO ()) -> (ByteString -> IO ()) -> WIO Items ()
+textBox' l update press = do
+    tb <- liftIO (newTextBox update press)
+    tell [item' l tb]
 
 toggle :: Label -> (Bool -> IO ()) -> WIO Items ()
 toggle l f = do
@@ -139,8 +173,8 @@ toggle l f = do
 link :: Label -> [String] -> WIO Items ()
 link l s = tell [item' l (ToMenu s)]
 
-back :: Label -> WIO Items ()
-back l = tell [item' l GoBack]
+back :: WIO Items ()
+back = tell [item' "back" GoBack]
 
 topMenu :: WIO Items () -> MkMenu ()
 topMenu = subMenu []
@@ -178,13 +212,15 @@ runHere :: InMenu (IO ())
 runHere = do
     Just itm <- selectedItem
     case _ielement itm of
-        Button p    -> return p
-        Field  p _  -> return p
-        ToMenu path -> do
+        Button p      -> return p
+        Field  p _    -> return p
+        ToMenu path   -> do
             menu      .= path
             selection .= 0
             return (return ())
-        GoBack      -> backOne >> return (return ())
+        GoBack        -> backOne >> return (return ())
+        TextBox _ p _ -> return p
+        _             -> return (return ())
 
 runEvent :: Event -> InMenu (IO ())
 runEvent ev = case ev of
@@ -195,3 +231,13 @@ runEvent ev = case ev of
     _          -> return (return ())
   where
     internally f = f >> return (return ())
+
+runKey :: Key -> InMenu (IO ())
+runKey k = do
+    Just itm <- selectedItem
+    case itm^.ielement of
+        TextBox f _ _ -> case k of
+            CharKey c    -> return $! f (Just c)
+            KeyBackspace -> return $! f Nothing
+            _            -> return (return ())
+        _ -> return (return ())

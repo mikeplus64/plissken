@@ -127,3 +127,6 @@ updateAllIOV v f = go 0
             =<< V.unsafeRead v i
         go (i + 1)
 
+
+sign :: (Integral b, Num c) => b -> c
+sign = fromIntegral . signum

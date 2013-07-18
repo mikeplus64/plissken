@@ -14,13 +14,12 @@ import Data.IORef
 
 import Data.Int
 import qualified Data.Text as T
-import Data.Text (Text, append, unpack)
+import Data.Text (Text)
 import Data.Maybe (fromMaybe)
 import Data.Monoid
 
 import Text.Read (readMaybe)
 
-import Game
 import Save
 
 data Event
@@ -34,6 +33,10 @@ data Event
     | AbsY !Int8
     | AbsZ !Int8
     | Flamethrow
+    | EndGame
+
+    | Delete
+    | Delete4x4
   deriving (Show,Read,Eq,Ord)
 
 type Scheme = M.Map GLFW.Key Event
@@ -47,22 +50,26 @@ defaultScheme = execWriter $ do
     CharKey 'D'  `maps` AbsX 1
     CharKey 'E'  `maps` AbsZ (-1)
     CharKey 'Q'  `maps` AbsZ 1
-    CharKey 'J'  `maps` AbsX 0
-    CharKey 'K'  `maps` AbsY 0
-    CharKey 'L'  `maps` AbsZ 0
-    KeySpace     `maps` Select
+    CharKey 'K'  `maps` EndGame
+    CharKey ' '  `maps` Flamethrow
+    KeySpace     `maps` Flamethrow
+    KeyBackspace `maps` Delete
+    CharKey 'O'  `maps` Delete4x4
     -- menu controls
     KeyEsc       `maps` ToggleMenu
     KeyEnter     `maps` Select
     KeyUp        `maps` MenuUp
     KeyDown      `maps` MenuDown
-    KeyBackspace `maps` Back
+    KeyRight     `maps` Select
+    KeyLeft      `maps` Back
   where
     maps k x    = tell (M.singleton k x)
 
 {-# INLINE withControls #-}
-withControls :: Applicative m => Scheme -> GLFW.Key -> (Event -> m ()) -> m ()
-withControls s k = F.for_ (M.lookup k s)
+withControls :: Scheme -> GLFW.Key -> (GLFW.Key -> IO ()) -> (Event -> IO ()) -> IO ()
+withControls s k fallback cc = case M.lookup k s of
+    Just ev -> fallback k >> cc ev
+    _       -> fallback k
 
 buildScheme :: Config -> Scheme
 buildScheme 

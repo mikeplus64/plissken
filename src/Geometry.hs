@@ -12,9 +12,9 @@ module Geometry
     ) where
 
 import Numeric.LinearAlgebra as X hiding (readMatrix, (|>), join, i)
-import Data.Packed.ST as X
-import Data.Packed.Foreign as X
-import Data.Packed.Vector as X
+import Data.Packed.ST as X hiding (join)
+import Data.Packed.Foreign as X hiding (join)
+import Data.Packed.Vector as X hiding (join)
 
 type Vec = Vector
 
