@@ -1,8 +1,7 @@
-#version 330 core
-
+#version 330
 in vec2 uv;
 in vec3 w_position;
-in vec3 cam_normal;
+flat in vec3 cam_normal;
 in vec3 cam_eye_dir;
 in vec3 cam_light_dir;
 
@@ -11,6 +10,7 @@ out vec4 colour;
 uniform mat4 VP;
 uniform mat4 V;
 uniform mat4 P;
+uniform float scale;
 uniform vec3 offset;
 uniform vec3 w_light_pos;
 uniform vec4 light_col;

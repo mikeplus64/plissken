@@ -1,12 +1,11 @@
-#version 330 core
-
-layout(location = 0) in vec3 position;
-layout(location = 1) in vec2 uvs;
-layout(location = 2) in vec3 normal;
+#version 330
+in vec3 position;
+in vec2 uvs;
+in vec3 normal;
 
 out vec2 uv;
 out vec3 w_position;
-out vec3 cam_normal;
+flat out vec3 cam_normal;
 out vec3 cam_eye_dir;
 out vec3 cam_light_dir;
 
