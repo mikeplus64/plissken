@@ -1,14 +1,15 @@
-#version 330 core
+// more or less what http://opengl-tutorial.org teaches
+// see https://code.google.com/p/opengl-tutorial-org/source/browse/tutorial08_basic_shading/ for a much nicer version
 
-layout(location = 0) in vec3 position;
-layout(location = 1) in vec2 uvs;
-layout(location = 2) in vec3 normal;
+in vec3 position;
+in vec2 uvs;
+in vec3 normal;
 
-out vec2 uv;
-out vec3 w_position;
-out vec3 cam_normal;
-out vec3 cam_eye_dir;
-out vec3 cam_light_dir;
+varying out vec2 uv;
+varying out vec3 w_position;
+varying out vec3 cam_normal;
+varying out vec3 cam_eye_dir;
+varying out vec3 cam_light_dir;
 
 uniform mat4 VP;
 uniform mat4 V;

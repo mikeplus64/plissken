@@ -1,4 +1,6 @@
-#version 330 core
+#version 330
+// more or less what http://opengl-tutorial.org teaches
+// see https://code.google.com/p/opengl-tutorial-org/source/browse/tutorial08_basic_shading/ for a much nicer version
 
 in vec2 uv;
 in vec3 w_position;
@@ -11,6 +13,7 @@ out vec4 colour;
 uniform mat4 VP;
 uniform mat4 V;
 uniform mat4 P;
+uniform float scale;
 uniform vec3 offset;
 uniform vec3 w_light_pos;
 uniform vec4 light_col;
