@@ -5,11 +5,11 @@ name:                plissken
 version:             0.1.0.0
 -- synopsis:            
 -- description:         
-license:             MIT
+license:             GPLv3
 license-file:        LICENSE
 author:              Mike Ledger
 maintainer:          eleventynine@gmail.com
--- copyright:           
+copyright:           Mike Ledger 2013,2014
 category:            Game
 build-type:          Simple
 cabal-version:       >=1.8
@@ -25,19 +25,18 @@ executable plissken
                  process,
                  directory,
                  vector,
-                 hmatrix == 0.15.0.0,
+                 hmatrix >= 0.15.0.0,
                  lens,
-                 OpenGLRaw == 1.3.0.0,
-                 FTGL == 1.333,
+                 OpenGLRaw >= 1.3.0.0,
+                 FTGL >= 1.333,
                  GLFW-b == 0.1.0.5,
                  attoparsec,
                  mtl,
                  dlist,
                  containers,
                  text,
-                 filepath,
-                 JuicyPixels == 3.1
+                 filepath
 
-  ghc-options: -O2 -threaded -rtsopts
+  ghc-options: -O2 -threaded -rtsopts -Wall
   hs-source-dirs:      src
   main-is: Main.hs
