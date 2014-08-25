@@ -5,7 +5,7 @@ name:                plissken
 version:             0.1.0.0
 -- synopsis:            
 -- description:         
-license:             MIT
+license:             GPLv3
 license-file:        LICENSE
 author:              Mike Ledger
 maintainer:          eleventynine@gmail.com
