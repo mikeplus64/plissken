@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -fwarn-missing-signatures #-}
 {-# LANGUAGE ForeignFunctionInterface, MagicHash, FlexibleInstances, OverloadedStrings, StandaloneDeriving, GeneralizedNewtypeDeriving, MultiParamTypeClasses, TypeFamilies #-}
 module Util where
 import Foreign.C

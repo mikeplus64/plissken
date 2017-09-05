@@ -1,0 +1,86 @@
+Looking for .cabal or package.yaml files to use to init the project.
+Using cabal packages:
+- plissken.cabal
+
+Selecting the best among 11 snapshots...
+
+* Partially matches lts-9.3
+    FTGL not found
+        - plissken requires >=1.333
+    GLFW-b version 1.4.8.1 found
+        - plissken requires ==0.1.0.5
+
+* Partially matches nightly-2017-09-04
+    FTGL not found
+        - plissken requires >=1.333
+    GLFW-b not found
+        - plissken requires ==0.1.0.5
+
+* Partially matches lts-8.24
+    FTGL not found
+        - plissken requires >=1.333
+    GLFW-b version 1.4.8.1 found
+        - plissken requires ==0.1.0.5
+
+* Partially matches lts-7.24
+    FTGL not found
+        - plissken requires >=1.333
+    GLFW-b version 1.4.8.1 found
+        - plissken requires ==0.1.0.5
+
+* Partially matches lts-6.35
+    FTGL not found
+        - plissken requires >=1.333
+    GLFW-b version 1.4.8.1 found
+        - plissken requires ==0.1.0.5
+
+* Partially matches lts-5.18
+    FTGL not found
+        - plissken requires >=1.333
+    GLFW-b version 1.4.8.0 found
+        - plissken requires ==0.1.0.5
+
+* Partially matches lts-4.2
+    FTGL not found
+        - plissken requires >=1.333
+    GLFW-b version 1.4.7.3 found
+        - plissken requires ==0.1.0.5
+
+* Partially matches lts-3.22
+    FTGL not found
+        - plissken requires >=1.333
+    GLFW-b not found
+        - plissken requires ==0.1.0.5
+    OpenGLRaw not found
+        - plissken requires >=1.3.0.0
+
+* Partially matches lts-2.22
+    FTGL not found
+        - plissken requires >=1.333
+    GLFW-b not found
+        - plissken requires ==0.1.0.5
+
+* Partially matches lts-1.15
+    FTGL not found
+        - plissken requires >=1.333
+    GLFW-b not found
+        - plissken requires ==0.1.0.5
+
+* Partially matches lts-0.7
+    FTGL not found
+        - plissken requires >=1.333
+    GLFW-b not found
+        - plissken requires ==0.1.0.5
+
+Selected resolver: lts-9.3
+Resolver 'lts-9.3' does not have all the packages to match your requirements.
+    FTGL not found
+        - plissken requires >=1.333
+    GLFW-b version 1.4.8.1 found
+        - plissken requires ==0.1.0.5
+
+This may be resolved by:
+    - Using '--solver' to ask cabal-install to generate extra-deps, atop the chosen snapshot.
+    - Using '--omit-packages to exclude mismatching package(s).
+    - Using '--resolver' to specify a matching snapshot/resolver
+
