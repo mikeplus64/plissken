@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -fwarn-missing-signatures #-}
 import Data.List
 import Data.Maybe
 import Data.Time
