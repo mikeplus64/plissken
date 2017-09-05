@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -fwarn-missing-signatures #-}
 {-# LANGUAGE TemplateHaskell, FunctionalDependencies, FlexibleInstances, RankNTypes #-}
 {-# OPTIONS_GHC -funbox-strict-fields #-}
 module Model where
